@@ -1,0 +1,40 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+    <title>Teste Par/Ímpar</title>
+    <style>
+        body { font-family: Arial; text-align: center; padding: 50px; }
+        input { padding: 10px; font-size: 16px; }
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; }
+        #resultado { margin-top: 20px; font-size: 20px; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>Verificador de Números</h1>
+    <input type="number" id="numero" placeholder="Digite um número">
+    <button onclick="verificar()">Verificar</button>
+    <div id="resultado"></div>
+
+    <script>
+        function verificar() {
+            const numero = document.getElementById('numero').value;
+            fetch('http://localhost:5000/verificar', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ numero: numero })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.erro) {
+                    document.getElementById('resultado').innerHTML = '❌ ' + data.erro;
+                    document.getElementById('resultado').style.color = 'orange';
+                } else {
+                    document.getElementById('resultado').innerHTML = data.numero + ' é ' + data.resultado;
+                    document.getElementById('resultado').style.color = data.par ? 'green' : 'red';
+                }
+            })
+            .catch(e => alert('Erro ao conectar: ' + e));
+        }
+    </script>
+</body>
+</html>
