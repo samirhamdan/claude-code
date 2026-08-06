@@ -63,6 +63,8 @@ services:
     restart: unless-stopped
     depends_on:
       - n8n
+    environment:
+      DOMAIN: ${DOMAIN}
     ports:
       - "80:80"
       - "443:443"
