@@ -44,7 +44,12 @@ services:
       DB_POSTGRESDB_USER: ${POSTGRES_USER}
       DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
       N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
-      WEBHOOK_URL: ${WEBHOOK_URL}
+      WEBHOOK_URL: https://${DOMAIN}/
+      N8N_HOST: ${DOMAIN}
+      N8N_PROTOCOL: https
+      N8N_BASIC_AUTH_ACTIVE: "true"
+      N8N_BASIC_AUTH_USER: ${N8N_BASIC_AUTH_USER}
+      N8N_BASIC_AUTH_PASSWORD: ${N8N_BASIC_AUTH_PASSWORD}
       GENERIC_TIMEZONE: America/Campo_Grande
       TZ: America/Campo_Grande
     volumes:
@@ -72,7 +77,7 @@ services:
     container_name: alessio_duckdns
     restart: unless-stopped
     environment:
-      SUBDOMAINS: ${DOMAIN%.duckdns.org}
+      SUBDOMAINS: ${SUBDOMAIN}
       TOKEN: ${DUCKDNS_TOKEN}
       TZ: America/Campo_Grande
 
