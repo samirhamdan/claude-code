@@ -85,7 +85,7 @@ services:
       TZ: America/Campo_Grande
 
   evolution-api:
-    image: atendai/evolution-api:v2.1.1
+    image: evoapicloud/evolution-api:v2.3.7
     container_name: alessio_evolution
     restart: unless-stopped
     depends_on:
