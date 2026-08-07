@@ -1,3 +1,7 @@
 {$DOMAIN} {
 	reverse_proxy n8n:5678
 }
+
+{$EVOLUTION_DOMAIN} {
+	reverse_proxy evolution-api:8080
+}
