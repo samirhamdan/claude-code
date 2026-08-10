@@ -1,0 +1,150 @@
+{
+  "name": "Briefing Matutino B3 + Cripto",
+  "nodes": [
+    {
+      "parameters": {
+        "cronExpression": "0 7 * * 1-6"
+      },
+      "name": "Cron",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.awesomeapi.com.br/last/USD-BRL,BTC-BRL,ETH-BRL",
+        "method": "GET",
+        "retry": {
+          "maxTries": 3,
+          "waitBetweenTries": 1000
+        }
+      },
+      "name": "Cotações",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [450, 150]
+    },
+    {
+      "parameters": {
+        "url": "https://query1.finance.yahoo.com/v10/finance/quoteSummary/BOVA11.SA?modules=price",
+        "method": "GET",
+        "retry": {
+          "maxTries": 3,
+          "waitBetweenTries": 1000
+        }
+      },
+      "name": "Ibovespa",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [450, 250]
+    },
+    {
+      "parameters": {
+        "url": "https://brapi.dev/api/quote/list?sortBy=volume&sortOrder=desc&limit=50&type=stock",
+        "method": "GET",
+        "retry": {
+          "maxTries": 3,
+          "waitBetweenTries": 1000
+        }
+      },
+      "name": "Acoes",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [450, 350]
+    },
+    {
+      "parameters": {
+        "url": "https://gnews.io/api/search?q=bolsa+mercado+finanças+brasil&lang=pt&sortby=publishedAt&max=5&apikey={{GNEWS_API_KEY}}",
+        "method": "GET",
+        "retry": {
+          "maxTries": 3,
+          "waitBetweenTries": 1000
+        }
+      },
+      "name": "Noticias",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [450, 450]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "multiplex"
+      },
+      "name": "Merge",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Helpers para formatação\nconst num = (val) => {\n  const str = String(val).split('.')[0];\n  return str.replace(/\\B(?=(\\d{3})+(?!\\d))/g, '.');\n};\n\nconst pct = (val) => {\n  const fixed = Number(val).toFixed(2).replace('.', ',');\n  return (val >= 0 ? '+' : '') + fixed + '%';\n};\n\nconst seta = (val) => (val >= 0 ? '▲' : '▼');\n\n// Parse cotações\nconst cot = $input.all()[0].json.USDBRL || {};\nconst btc = $input.all()[0].json.BTCBRL || {};\nconst eth = $input.all()[0].json.ETHBRL || {};\n\n// Parse Ibovespa (BOVA11 como proxy)\nlet iboChange = 'N/A';\ntry {\n  const iboData = $input.all()[1].json.quoteSummary?.result?.[0]?.price;\n  if (iboData) {\n    const regularMarketChangePercent = iboData.regularMarketChangePercent?.raw || 0;\n    iboChange = pct(regularMarketChangePercent);\n  }\n} catch (e) {\n  iboChange = 'Erro';\n}\n\n// Parse ações: top 3 e bottom 3 por mudança percentual\nlet altas = 'N/A';\nlet baixas = 'N/A';\ntry {\n  const acoes = $input.all()[2].json.stocks || [];\n  if (acoes.length >= 6) {\n    const sorted = [...acoes].sort((a, b) => (b.regularMarketChangePercent || 0) - (a.regularMarketChangePercent || 0));\n    const topAltas = sorted.slice(0, 3);\n    const topBaixas = sorted.slice(-3).reverse();\n    \n    altas = topAltas.map(a => `${a.stock} ${pct(a.regularMarketChangePercent)} ${seta(a.regularMarketChangePercent)}`).join('\\n');\n    baixas = topBaixas.map(a => `${a.stock} ${pct(a.regularMarketChangePercent)} ${seta(a.regularMarketChangePercent)}`).join('\\n');\n  }\n} catch (e) {\n  altas = 'Erro';\n  baixas = 'Erro';\n}\n\n// Parse notícias\nlet noticias = 'N/A';\ntry {\n  const news = $input.all()[3].json.articles || [];\n  if (news.length > 0) {\n    noticias = news.slice(0, 3).map((n, i) => `${i + 1}. ${n.title}`).join('\\n');\n  }\n} catch (e) {\n  noticias = 'Erro';\n}\n\n// Formatar data em português\nconst agora = new Date();\nconst diasSemana = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];\nconst meses = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];\nconst diaSemana = diasSemana[agora.getDay()];\nconst dia = agora.getDate();\nconst mes = meses[agora.getMonth()];\n\nconst mensagem = `📊 *BRIEFING MATUTINO* — ${diaSemana.toUpperCase()}, ${dia} de ${mes}\\n\\n💱 *COTAÇÕES*\\nUSD/BRL: ${cot.bid || 'N/A'}\\nBTC/BRL: R$ ${num(btc.bid || 0)}\\nETH/BRL: R$ ${num(eth.bid || 0)}\\n\\n📈 *ÍNDICE*\\nIbovespa (BOVA11): ${iboChange}\\n\\n🚀 *ALTAS*\\n${altas}\\n\\n📉 *BAIXAS*\\n${baixas}\\n\\n📰 *DESTAQUES*\\n${noticias}`;\n\nreturn { mensagem, timestamp: new Date().toISOString() };"
+      },
+      "name": "Montar Mensagem",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://evo-hub67.duckdns.org/message/sendText/samir-pessoal",
+        "method": "POST",
+        "headers": {
+          "apikey": "{{EVOLUTION_API_KEY}}"
+        },
+        "contentType": "application/json",
+        "body": "{\"number\":\"5567998283590@s.whatsapp.net\",\"text\":\"{{$json.mensagem}}\"}"
+      },
+      "name": "Enviar para WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1050, 300]
+    }
+  ],
+  "connections": {
+    "Cron": {
+      "main": [
+        [
+          { "node": "Cotações", "branch": 0 },
+          { "node": "Ibovespa", "branch": 0 },
+          { "node": "Acoes", "branch": 0 },
+          { "node": "Noticias", "branch": 0 }
+        ]
+      ]
+    },
+    "Cotações": {
+      "main": [
+        [{ "node": "Merge", "branch": 0 }]
+      ]
+    },
+    "Ibovespa": {
+      "main": [
+        [{ "node": "Merge", "branch": 1 }]
+      ]
+    },
+    "Acoes": {
+      "main": [
+        [{ "node": "Merge", "branch": 2 }]
+      ]
+    },
+    "Noticias": {
+      "main": [
+        [{ "node": "Merge", "branch": 3 }]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [{ "node": "Montar Mensagem", "branch": 0 }]
+      ]
+    },
+    "Montar Mensagem": {
+      "main": [
+        [{ "node": "Enviar para WhatsApp", "branch": 0 }]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "timezone": "America/Campo_Grande"
+  }
+}
