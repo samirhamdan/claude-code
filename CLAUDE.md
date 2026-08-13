@@ -33,65 +33,61 @@ fixo da Alessio espalhado pelos fluxos — tudo vem de arquivo de config.
 | Item | Status |
 |---|---|
 | VPS RackNerd (2 GB, New York, Ubuntu 24.04) | contratada |
-| docker-compose lite (Postgres + Redis + n8n + Caddy) | implantado |
+| docker-compose (Postgres + Redis + n8n + Caddy + Evolution) | implantado |
 | DuckDNS + Caddy HTTPS | concluído (hub67.duckdns.org) |
-| Bot do Telegram | concluído — eco funcionando |
-| Fluxo de qualificação no n8n | em andamento (etapa 2) |
-| Prompt de qualificação | escrito, não testado |
+| Evolution API / WhatsApp | ✅ instalado e funcionando |
+| Bot de qualificação no WhatsApp | funcionando |
+| Briefing matutino (horário pré-definido) | ✅ funcionando (7am) |
+| Fluxo de qualificação (webhook → Redis → Claude) | próximo passo |
+| Prompt de qualificação | escrito, em validação |
 | Régua de score | não iniciada |
 | Funil no Trello | não iniciado |
-| Evolution API / WhatsApp | fase 2, não iniciada |
 
 ---
 
-## 3. Decisões fechadas — não reabrir
+## 3. Decisões arquiteturais — implementadas
 
-Estas já foram discutidas. Se você discordar, diga o porquê em uma
-frase e siga; não refaça sozinho.
+1. **WhatsApp via Evolution API, não API oficial da Meta.** ✅ Em produção.
+   Elimina a janela de 24h, então o follow-up D+1/D+3/D+7 funciona sem
+   template. Risco de banimento mitigado com chip dedicado e delay aleatório.
 
-1. **Telegram primeiro, WhatsApp depois.** O Telegram é bancada de teste:
-   grátis, oficial, sem risco de banimento. Toda a lógica (prompt, estado,
-   Trello, score) é idêntica. Na fase 2 trocam-se só os nós de entrada e
-   saída pelo Evolution.
+2. **Estado da conversa no Redis, não no Postgres.** ✅ Implementado.
+   Chave por telefone, guarda histórico e campos coletados. O modelo é
+   stateless — quem lembra é o Redis.
 
-2. **WhatsApp via Evolution API, não API oficial da Meta.** Escolha
-   consciente: elimina a janela de 24h, então o follow-up D+3 e D+7
-   funciona sem template aprovado. Custo: risco de banimento do número,
-   mitigado com chip dedicado, aquecimento e delay aleatório no envio.
+3. **Registro e follow-up no Trello**, board ALESSIO. Não construir CRM.
+   (próximo passo após qualificação)
 
-3. **Estado da conversa no Redis, não no Postgres.** Chave por telefone,
-   guarda histórico e campos coletados. O modelo é stateless — quem
-   lembra é o Redis.
-
-4. **Registro e follow-up no Trello**, board ALESSIO. Não construir CRM.
-
-5. **O bot responde e qualifica sozinho**, mas passa para humano nos
+4. **O bot responde e qualifica sozinho**, mas passa para humano nos
    gatilhos de handoff (ver `prompts/system-qualificacao.md`).
 
-6. **Uma chamada ao Claude por turno**, retornando JSON estrito.
+5. **Uma chamada ao Claude por turno**, retornando JSON estrito.
 
 ---
 
 ## 4. Arquitetura
 
 ```
-Telegram / WhatsApp
+WhatsApp (Evolution API)
         │
         ▼
    n8n (webhook)
         │
-   ┌────┴─────────────────────────┐
-   │ 1. filtra (grupo, fromMe)    │
-   │ 2. debounce 8s               │
-   │ 3. lê estado no Redis        │
-   │ 4. chama Claude → JSON       │
-   │ 5. envia resposta            │
-   │ 6. regrava estado            │
-   │ 7. se completo → card Trello │
-   └──────────────────────────────┘
+   ┌────┴──────────────────────────┐
+   │ 1. filtra (grupo, fromMe)     │
+   │ 2. debounce 8s                │
+   │ 3. lê estado no Redis         │
+   │ 4. chama Claude → JSON        │
+   │ 5. envia resposta (Evolution) │
+   │ 6. regrava estado no Redis    │
+   │ 7. se lead quente → card Trello
+   └───────────────────────────────┘
         │
-   cron diário → follow-up D+1 / D+3 / D+7
+   cron diário → follow-up D+1 / D+3 / D+7 (Evolution)
 ```
+
+**Fluxo:** Mensagem WhatsApp → Evolution webhook → n8n → Redis + Claude
+→ resposta qualificadora → WhatsApp (Evolution).
 
 **Debounce de 8 segundos é obrigatório.** O lead manda três mensagens
 seguidas; sem isso o bot responde três vezes e a conversa desanda.
@@ -107,38 +103,39 @@ isso o bot repergunta o nome na quarta mensagem.
 sdr-agent/
 ├── CLAUDE.md
 ├── infra/
-│   ├── lite/                 # fase 1: sem Evolution
+│   ├── lite/                 # stack: Postgres + Redis + n8n + Caddy + Evolution
 │   │   ├── docker-compose.yml
 │   │   ├── Caddyfile
 │   │   └── env.example
-│   ├── full/                 # fase 2: com Evolution
 │   └── README.md             # passo a passo de implantação
 ├── prompts/
-│   ├── system-qualificacao.md
-│   ├── schema-saida.json
+│   ├── system-qualificacao.md  # sistema do agente qualificador
+│   ├── schema-saida.json       # estrutura JSON esperada
+│   ├── briefing.md             # template de briefing matutino
 │   └── clientes/
-│       └── alessio.md        # variáveis por cliente
+│       └── alessio.md          # variáveis por cliente
 ├── workflows/
-│   ├── qualificacao.json     # export do n8n
-│   └── followup.json
-└── scripts/
-    ├── backup.sh
-    └── n8n-deploy.sh         # sobe workflow via API do n8n
+│   ├── qualificacao.json       # export do n8n (webhook → Claude → Redis)
+│   ├── followup.json           # cron diário (D+1, D+3, D+7)
+│   └── briefing-matutino.json  # cron 7am (dados de mercado)
+├── scripts/
+│   ├── backup.sh               # backup do Postgres
+│   ├── n8n-deploy.sh           # deploy via API do n8n
+│   └── test-apis.sh            # validação de fontes
+└── .env.example                # variáveis globais
 ```
 
 ---
 
 ## 6. Roadmap — seguir nesta ordem
 
-1. **Infra** — VPS no ar, DuckDNS, HTTPS válido, n8n acessível, bot do
-   Telegram respondendo um eco. **✅ concluída**
-2. **Fluxo** — webhook → debounce → Redis → Claude → resposta. Ponta a
-   ponta no Telegram, sem Trello ainda. **← em andamento**
-3. **Score** — régua de classificação do lead, definida com o vendedor.
-4. **Funil** — listas no Trello, criação de card, cron de follow-up.
-5. **Fase 2** — Evolution API, chip aquecido, troca dos nós de I/O.
+1. **Infra** — VPS, DuckDNS, HTTPS, n8n, Evolution API. **✅ concluído**
+2. **Briefing matutino** — cron 7am, dados de mercado via WhatsApp. **✅ funcionando**
+3. **Fluxo de qualificação** — webhook → debounce → Redis → Claude → resposta. **← próximo**
+4. **Score** — régua de classificação do lead, definida com vendedor.
+5. **Funil** — Trello, criação de card, cron de follow-up D+1/D+3/D+7.
 
-Não pule etapa. Cada uma tem um critério de pronto verificável.
+Cada etapa tem um critério de pronto verificável antes de passar à próxima.
 
 ---
 
@@ -196,8 +193,6 @@ curl -H "X-N8N-API-KEY: $N8N_API_KEY" \
 
 - **Lead quente** — nome, serviço, tipo de imóvel, região e urgência
   preenchidos, e urgência é `imediata` ou `esta_semana`.
-- **Handoff** — bot para de qualificar e chama humano.
-- **Bancada** — ambiente Telegram, para testar sem risco de chip.
-- **Fase 1 / Fase 2** — antes e depois da entrada do Evolution.
-- **Caso zero** — a Alessio, primeiro cliente e fonte das métricas de
-  venda do produto.
+- **Handoff** — bot para de qualificar e chama humano (vendedor).
+- **Caso zero** — a Alessio, primeiro cliente em produção e fonte das
+  métricas de venda do produto.
