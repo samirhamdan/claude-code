@@ -30,6 +30,32 @@ const ANTHROPIC_KEY = $env.ANTHROPIC_API_KEY;
 const MODELO = 'claude-sonnet-5';
 const MAX_VOLTAS = 5;
 
+// ------------------------------------------------------------------ rede
+//
+// O Code node do n8n roda no task runner, que não expõe `fetch` global.
+// A porta de saída é `this.helpers.httpRequest`, que já devolve o corpo
+// parseado e lança exceção em status fora de 2xx.
+
+const ctx = this;
+
+// URLSearchParams é Web API e pode não existir no sandbox, igual ao fetch.
+function qs(obj) {
+  return Object.entries(obj)
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+    .join('&');
+}
+
+async function http(opcoes) {
+  try {
+    return await ctx.helpers.httpRequest(opcoes);
+  } catch (e) {
+    const status = e.statusCode ?? e.httpCode ?? '?';
+    let corpo = e.response?.body ?? e.error ?? e.message;
+    if (typeof corpo === 'object') corpo = JSON.stringify(corpo);
+    throw new Error(`${status} em ${opcoes.url} — ${String(corpo).slice(0, 300)}`);
+  }
+}
+
 // ---------------------------------------------------------------- utilidades
 
 // Campo Grande é UTC-4 o ano todo.
@@ -56,11 +82,9 @@ const hoje = agoraLocal();
 const TRELLO_AUTH = `key=${config.trello_key}&token=${config.trello_token}`;
 
 async function trello(caminho, metodo = 'GET', params = {}) {
-  const query = new URLSearchParams(params).toString();
+  const query = qs(params);
   const url = `https://api.trello.com/1${caminho}?${TRELLO_AUTH}${query ? '&' + query : ''}`;
-  const r = await fetch(url, { method: metodo });
-  if (!r.ok) throw new Error(`Trello ${r.status}: ${await r.text()}`);
-  return r.json();
+  return http({ method: metodo, url, json: true });
 }
 
 // ------------------------------------------------------------ Google Sheets
@@ -79,29 +103,31 @@ async function tokenGoogle() {
     return tokenSheets;
   }
 
-  const r = await fetch('https://oauth2.googleapis.com/token', {
+  const r = await http({
     method: 'POST',
+    url: 'https://oauth2.googleapis.com/token',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
+    body: qs({
       client_id: $env.GOOGLE_CLIENT_ID,
       client_secret: $env.GOOGLE_CLIENT_SECRET,
       refresh_token: refresh,
       grant_type: 'refresh_token',
     }),
+    json: true,
   });
-  if (!r.ok) throw new Error(`Google OAuth ${r.status}: ${await r.text()}`);
-  tokenSheets = (await r.json()).access_token;
+  tokenSheets = (typeof r === 'string' ? JSON.parse(r) : r).access_token;
   return tokenSheets;
 }
 
 async function sheetsLer(aba, intervalo) {
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${config.planilha_id}`
             + `/values/${encodeURIComponent(aba + '!' + intervalo)}`;
-  const r = await fetch(url, {
+  const dados = await http({
+    method: 'GET',
+    url,
     headers: { Authorization: `Bearer ${await tokenGoogle()}` },
+    json: true,
   });
-  if (!r.ok) throw new Error(`Sheets ${r.status}: ${await r.text()}`);
-  const dados = await r.json();
   return dados.values || [];
 }
 
@@ -109,16 +135,16 @@ async function sheetsAcrescentar(aba, intervalo, linha) {
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${config.planilha_id}`
             + `/values/${encodeURIComponent(aba + '!' + intervalo)}`
             + `:append?valueInputOption=USER_ENTERED`;
-  const r = await fetch(url, {
+  return http({
     method: 'POST',
+    url,
     headers: {
       Authorization: `Bearer ${await tokenGoogle()}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ values: [linha] }),
+    body: { values: [linha] },
+    json: true,
   });
-  if (!r.ok) throw new Error(`Sheets ${r.status}: ${await r.text()}`);
-  return r.json();
 }
 
 function paraNumero(v) {
@@ -413,23 +439,23 @@ Hoje é ${porExtenso(hoje)} (${dataISO(hoje)}), fuso de Campo Grande, UTC-4.
 // -------------------------------------------------------------------- laço
 
 async function chamarClaude(mensagens) {
-  const r = await fetch('https://api.anthropic.com/v1/messages', {
+  return http({
     method: 'POST',
+    url: 'https://api.anthropic.com/v1/messages',
     headers: {
       'x-api-key': ANTHROPIC_KEY,
       'anthropic-version': '2023-06-01',
       'content-type': 'application/json',
     },
-    body: JSON.stringify({
+    body: {
       model: MODELO,
       max_tokens: 1024,
       system: systemPrompt,
       tools: ferramentas,
       messages: mensagens,
-    }),
+    },
+    json: true,
   });
-  if (!r.ok) throw new Error(`Anthropic ${r.status}: ${await r.text()}`);
-  return r.json();
 }
 
 const mensagens = [{ role: 'user', content: texto }];
