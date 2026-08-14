@@ -25,10 +25,17 @@ const entrada = $input.first().json;
 const config = entrada.config;
 const texto = entrada.texto;
 
+// Turnos anteriores, vindos do Redis pelo nó Lê Histórico.
+const historico = Array.isArray(entrada.historico) ? entrada.historico : [];
+
 const ANTHROPIC_KEY = $env.ANTHROPIC_API_KEY;
 
 const MODELO = 'claude-sonnet-5';
 const MAX_VOLTAS = 5;
+
+// Quantas mensagens do histórico mandar de volta. Par, para não cortar
+// um turno do usuário sem a resposta dele — a API exige alternância.
+const MAX_HISTORICO = 10;
 
 // ------------------------------------------------------------------ rede
 //
@@ -458,7 +465,7 @@ async function chamarClaude(mensagens) {
   });
 }
 
-const mensagens = [{ role: 'user', content: texto }];
+const mensagens = [...historico, { role: 'user', content: texto }];
 const usadas = [];
 let resposta = 'Não consegui concluir, tenta de novo?';
 let voltas = 0;
@@ -499,4 +506,20 @@ while (voltas < MAX_VOLTAS) {
   mensagens.push({ role: 'user', content: resultados });
 }
 
-return [{ json: { resposta, ferramentas_usadas: usadas, voltas } }];
+// O histórico guarda só o texto de cada turno, não os blocos de tool_use
+// e tool_result. Eles incham a chave depressa e, se um tool_use for cortado
+// pelo limite sem o tool_result correspondente, a API rejeita a conversa.
+const historicoNovo = [
+  ...historico,
+  { role: 'user', content: texto },
+  { role: 'assistant', content: resposta },
+].slice(-MAX_HISTORICO);
+
+return [{
+  json: {
+    resposta,
+    ferramentas_usadas: usadas,
+    voltas,
+    historico: JSON.stringify(historicoNovo),
+  },
+}];
