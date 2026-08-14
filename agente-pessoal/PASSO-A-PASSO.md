@@ -5,6 +5,38 @@ Não pule para a fase seguinte se a anterior não fechou.
 
 ---
 
+## Estado — 14/08/2026
+
+| Fase | Status |
+|---|---|
+| 1. Credenciais do Trello | ✅ |
+| 2. Gravar no banco | ✅ |
+| 3. Env no Code node | ✅ |
+| 4. Canvas | ✅ 5 nós ligados |
+| 5. Teste por curl | ✅ criar_tarefa e listar_tarefas |
+| 6. Google Sheets | ⏳ falta credencial |
+| 7. WhatsApp de verdade | ⏳ |
+
+**Provado em produção:** webhook → Postgres → laço de tool use → Anthropic
+→ Trello → WhatsApp. Card criado com prazo convertido certo para UTC
+(14h local → `18:00Z`), e listado de volta no turno seguinte.
+
+**Faltando, além das fases:** onboarding (seção 9 do CLAUDE.md) e memória
+entre mensagens — hoje cada mensagem chega sem o turno anterior, então não
+dá para responder "sim" a uma pergunta que o agente fez.
+
+### Armadilhas já resolvidas, não repetir
+
+- O banco `alessio` não existia; o n8n usa o banco `n8n`. Precisou `CREATE DATABASE`.
+- Heredoc do `psql` engoliu o SQL — o que funcionou foi `docker cp` + `psql -f`.
+- Na página do Trello há **Key**, **Secret** e **Token**. O Secret não serve aqui.
+- O task runner do n8n 2.33 não expõe `fetch` nem `URLSearchParams`. A saída
+  de rede é `this.helpers.httpRequest`.
+- "Execute step" num nó sem entrada põe o Webhook em escuta — parece travado,
+  mas está esperando o curl.
+
+---
+
 ## FASE 1 — Validar Trello antes de qualquer coisa
 
 Pegue key e token em https://trello.com/app-key
