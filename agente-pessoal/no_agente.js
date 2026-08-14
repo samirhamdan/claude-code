@@ -1,258 +1,444 @@
 /**
- * Nó Agente — Loop de Tool Use
+ * Nó Agente — Laço de Tool Use
  *
- * Entrada esperada:
- * - $json.numero (WhatsApp)
- * - $json.texto (mensagem do usuário)
- * - $json.config (SELECT do Postgres com usuário)
+ * Cole isto num nó Code do n8n, modo "Run Once for All Items".
+ *
+ * Entrada (do nó Carrega Config):
+ *   numero  — telefone do WhatsApp, só dígitos
+ *   texto   — mensagem do usuário (digitada ou transcrita)
+ *   config  — linha da tabela `usuarios`
  *
  * Saída:
- * - $json.resposta (texto final)
- * - $json.ferramentas_usadas (array de calls)
+ *   resposta          — texto final para o WhatsApp
+ *   ferramentas_usadas — o que foi chamado, para depuração
+ *   voltas            — quantas idas ao modelo
+ *
+ * Requer no docker-compose do n8n:
+ *   N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+ * e no .env:
+ *   ANTHROPIC_API_KEY, GOOGLE_SHEETS_TOKEN
  */
 
-const Anthropic = require("@anthropic-ai/sdk").default;
+const entrada = $input.first().json;
+const config = entrada.config;
+const texto = entrada.texto;
 
-// Inicializar cliente
-const client = new Anthropic({
-  apiKey: $env.ANTHROPIC_API_KEY,
-});
+const ANTHROPIC_KEY = $env.ANTHROPIC_API_KEY;
+const SHEETS_TOKEN = $env.GOOGLE_SHEETS_TOKEN;
 
-// Config do usuário (vem do nó anterior)
-const config = $json.config;
-const numero = $json.numero;
-const texto = $json.texto;
+const MODELO = 'claude-sonnet-5';
+const MAX_VOLTAS = 5;
 
-// Montarystem prompt com config
-const systemPrompt = `Você se chama ${config.nome_assistente || "Assistente"}.
-Fale de forma ${config.tom || "profissional"}.
-Responda em ${config.idioma || "pt-BR"}.
+// ---------------------------------------------------------------- utilidades
+
+// Campo Grande é UTC-4 o ano todo.
+function agoraLocal() {
+  return new Date(Date.now() - 4 * 60 * 60 * 1000);
+}
+
+function dataISO(d) {
+  return d.toISOString().slice(0, 10);
+}
+
+function porExtenso(d) {
+  const dias = ['domingo', 'segunda-feira', 'terça-feira', 'quarta-feira',
+                'quinta-feira', 'sexta-feira', 'sábado'];
+  const meses = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho',
+                 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+  return `${dias[d.getUTCDay()]}, ${d.getUTCDate()} de ${meses[d.getUTCMonth()]}`;
+}
+
+const hoje = agoraLocal();
+
+// ------------------------------------------------------------------- Trello
+
+const TRELLO_AUTH = `key=${config.trello_key}&token=${config.trello_token}`;
+
+async function trello(caminho, metodo = 'GET', params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const url = `https://api.trello.com/1${caminho}?${TRELLO_AUTH}${query ? '&' + query : ''}`;
+  const r = await fetch(url, { method: metodo });
+  if (!r.ok) throw new Error(`Trello ${r.status}: ${await r.text()}`);
+  return r.json();
+}
+
+// ------------------------------------------------------------ Google Sheets
+
+async function sheetsLer(aba, intervalo) {
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${config.planilha_id}`
+            + `/values/${encodeURIComponent(aba + '!' + intervalo)}`;
+  const r = await fetch(url, { headers: { Authorization: `Bearer ${SHEETS_TOKEN}` } });
+  if (!r.ok) throw new Error(`Sheets ${r.status}: ${await r.text()}`);
+  const dados = await r.json();
+  return dados.values || [];
+}
+
+async function sheetsAcrescentar(aba, intervalo, linha) {
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${config.planilha_id}`
+            + `/values/${encodeURIComponent(aba + '!' + intervalo)}`
+            + `:append?valueInputOption=USER_ENTERED`;
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${SHEETS_TOKEN}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ values: [linha] }),
+  });
+  if (!r.ok) throw new Error(`Sheets ${r.status}: ${await r.text()}`);
+  return r.json();
+}
+
+function paraNumero(v) {
+  // A planilha pode devolver "45,90" ou "R$ 45,90".
+  return Number(String(v ?? '').replace(/[^\d,.-]/g, '').replace(',', '.')) || 0;
+}
+
+// -------------------------------------------------------------- ferramentas
+
+const ferramentas = [
+  {
+    name: 'criar_tarefa',
+    description: 'Cria uma tarefa como card no Trello, na lista de entrada.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        titulo: { type: 'string', description: 'Comece por verbo no infinitivo.' },
+        descricao: { type: 'string' },
+        prazo: { type: 'string', description: 'ISO 8601 em UTC. Some 4h ao horário local.' },
+      },
+      required: ['titulo'],
+    },
+  },
+  {
+    name: 'listar_tarefas',
+    description: 'Lista tarefas abertas do Trello.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        filtro: { type: 'string', enum: ['hoje', 'semana', 'atrasados', 'todos'] },
+      },
+      required: ['filtro'],
+    },
+  },
+  {
+    name: 'registrar_gasto',
+    description: 'Grava um gasto na aba Gastos. Depois consulte o orçamento da categoria.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        descricao: { type: 'string' },
+        valor: { type: 'number' },
+        categoria: { type: 'string' },
+        data: { type: 'string', description: 'AAAA-MM-DD. Omita para hoje.' },
+      },
+      required: ['descricao', 'valor', 'categoria'],
+    },
+  },
+  {
+    name: 'consultar_gastos',
+    description: 'Soma gastos de um período, opcionalmente filtrando por categoria.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        periodo: { type: 'string', enum: ['ontem', 'semana', 'mes'] },
+        categoria: { type: 'string' },
+      },
+      required: ['periodo'],
+    },
+  },
+  {
+    name: 'registrar_conta',
+    description: 'Grava uma conta a pagar ou receber na aba Contas.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        descricao: { type: 'string' },
+        valor: { type: 'number' },
+        dia: { type: 'number', description: 'Dia do mês do vencimento, 1 a 31.' },
+        categoria: { type: 'string' },
+        tipo: { type: 'string', enum: ['fixa', 'parcelada'] },
+        fluxo: { type: 'string', enum: ['pagar', 'receber'] },
+      },
+      required: ['descricao', 'valor', 'dia', 'categoria', 'tipo', 'fluxo'],
+    },
+  },
+  {
+    name: 'listar_contas',
+    description: 'Lista contas pendentes. Uma conta é pendente quando não há gasto '
+               + 'correspondente na categoria dela no mês corrente.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        periodo: { type: 'string', enum: ['proximos_dias', 'mes', 'atrasadas'] },
+      },
+      required: ['periodo'],
+    },
+  },
+  {
+    name: 'definir_orcamento',
+    description: 'Define o limite mensal de uma categoria.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        categoria: { type: 'string' },
+        limite: { type: 'number' },
+      },
+      required: ['categoria', 'limite'],
+    },
+  },
+  {
+    name: 'consultar_orcamento',
+    description: 'Compara o gasto do mês com o limite. Sem categoria, devolve todas.',
+    input_schema: {
+      type: 'object',
+      properties: { categoria: { type: 'string' } },
+    },
+  },
+];
+
+// ------------------------------------------------------- execução das tools
+
+async function executar(nome, args) {
+  switch (nome) {
+
+    case 'criar_tarefa': {
+      const card = await trello('/cards', 'POST', {
+        idList: config.trello_list_id,
+        name: args.titulo,
+        ...(args.descricao ? { desc: args.descricao } : {}),
+        ...(args.prazo ? { due: args.prazo } : {}),
+      });
+      return `Card criado: "${card.name}" (${card.shortUrl})`;
+    }
+
+    case 'listar_tarefas': {
+      const cards = await trello(`/boards/${config.trello_board_id}/cards`, 'GET', {
+        fields: 'name,due,dueComplete,shortUrl',
+      });
+      const limite = new Date(hoje);
+      if (args.filtro === 'hoje') limite.setUTCHours(23, 59, 59);
+      if (args.filtro === 'semana') limite.setUTCDate(limite.getUTCDate() + 7);
+
+      const filtrados = cards.filter((c) => {
+        if (c.dueComplete) return false;
+        if (args.filtro === 'todos') return true;
+        if (!c.due) return false;
+        const due = new Date(c.due);
+        if (args.filtro === 'atrasados') return due < hoje;
+        return due <= limite;
+      });
+
+      if (!filtrados.length) return 'Nenhuma tarefa nesse filtro.';
+      return filtrados
+        .map((c) => `- ${c.name}${c.due ? ` (vence ${c.due.slice(0, 10)})` : ''}`)
+        .join('\n');
+    }
+
+    case 'registrar_gasto': {
+      const data = args.data || dataISO(hoje);
+      await sheetsAcrescentar('Gastos', 'A:D',
+        [data, args.descricao, args.valor, args.categoria]);
+      return `Gasto gravado: ${args.descricao}, R$ ${args.valor}, ${args.categoria}, ${data}.`;
+    }
+
+    case 'consultar_gastos': {
+      const linhas = (await sheetsLer('Gastos', 'A2:D')).filter((l) => l.length);
+      const inicio = new Date(hoje);
+      if (args.periodo === 'ontem') inicio.setUTCDate(inicio.getUTCDate() - 1);
+      if (args.periodo === 'semana') inicio.setUTCDate(inicio.getUTCDate() - 7);
+      if (args.periodo === 'mes') inicio.setUTCDate(1);
+      const corte = dataISO(inicio);
+      const limite = args.periodo === 'ontem' ? corte : dataISO(hoje);
+
+      const selecao = linhas.filter(([data, , , cat]) => {
+        if (!data || data < corte || data > limite) return false;
+        return !args.categoria
+          || String(cat).toLowerCase() === args.categoria.toLowerCase();
+      });
+
+      if (!selecao.length) return 'Nenhum gasto no período.';
+      const total = selecao.reduce((s, l) => s + paraNumero(l[2]), 0);
+      const porCategoria = {};
+      for (const l of selecao) {
+        porCategoria[l[3] || 'sem categoria'] =
+          (porCategoria[l[3] || 'sem categoria'] || 0) + paraNumero(l[2]);
+      }
+      const detalhe = Object.entries(porCategoria)
+        .map(([c, v]) => `${c}: R$ ${v.toFixed(2)}`).join('; ');
+      return `Total R$ ${total.toFixed(2)} em ${selecao.length} lançamentos. ${detalhe}`;
+    }
+
+    case 'registrar_conta': {
+      await sheetsAcrescentar('Contas', 'A:F', [
+        args.descricao, args.valor, args.dia, args.categoria, args.tipo, args.fluxo,
+      ]);
+      return `Conta gravada: ${args.descricao}, R$ ${args.valor}, `
+           + `vence dia ${args.dia}, ${args.fluxo}.`;
+    }
+
+    case 'listar_contas': {
+      const contas = (await sheetsLer('Contas', 'A2:F')).filter((l) => l.length);
+      if (!contas.length) return 'Nenhuma conta cadastrada.';
+
+      // Gastos do mês corrente, para saber o que já foi pago.
+      const inicioMes = dataISO(new Date(Date.UTC(
+        hoje.getUTCFullYear(), hoje.getUTCMonth(), 1)));
+      const gastos = (await sheetsLer('Gastos', 'A2:D'))
+        .filter((l) => l.length && l[0] >= inicioMes)
+        .map((l) => String(l[3] || '').toLowerCase());
+
+      const diaHoje = hoje.getUTCDate();
+      const pendentes = contas.filter(([, , dia, cat]) => {
+        if (gastos.includes(String(cat).toLowerCase())) return false;
+        const d = Number(dia);
+        if (args.periodo === 'atrasadas') return d < diaHoje;
+        if (args.periodo === 'proximos_dias') return d >= diaHoje && d <= diaHoje + 7;
+        return true;
+      });
+
+      if (!pendentes.length) return 'Nenhuma conta pendente nesse período.';
+      const formata = (fluxo) => pendentes
+        .filter((c) => c[5] === fluxo)
+        .map((c) => `- ${c[0]}: R$ ${paraNumero(c[1]).toFixed(2)} (dia ${c[2]})`)
+        .join('\n') || '- nenhuma';
+      return `A pagar:\n${formata('pagar')}\n\nA receber:\n${formata('receber')}`;
+    }
+
+    case 'definir_orcamento': {
+      await sheetsAcrescentar('Orçamento', 'A:B', [args.categoria, args.limite]);
+      return `Limite de R$ ${args.limite} definido para ${args.categoria}.`;
+    }
+
+    case 'consultar_orcamento': {
+      const limites = (await sheetsLer('Orçamento', 'A2:B')).filter((l) => l.length);
+      if (!limites.length) return 'Nenhum limite de orçamento definido ainda.';
+
+      const inicioMes = dataISO(new Date(Date.UTC(
+        hoje.getUTCFullYear(), hoje.getUTCMonth(), 1)));
+      const gastos = (await sheetsLer('Gastos', 'A2:D'))
+        .filter((l) => l.length && l[0] >= inicioMes);
+
+      const alvo = args.categoria
+        ? limites.filter(([c]) => String(c).toLowerCase() === args.categoria.toLowerCase())
+        : limites;
+
+      if (!alvo.length) {
+        return `A categoria "${args.categoria}" não tem limite definido.`;
+      }
+
+      return alvo.map(([cat, lim]) => {
+        const limite = paraNumero(lim);
+        const gasto = gastos
+          .filter((g) => String(g[3]).toLowerCase() === String(cat).toLowerCase())
+          .reduce((s, g) => s + paraNumero(g[2]), 0);
+        const pct = limite ? Math.round((gasto / limite) * 100) : 0;
+        return `${cat}: R$ ${gasto.toFixed(2)} de R$ ${limite.toFixed(2)} (${pct}%)`;
+      }).join('\n');
+    }
+
+    default:
+      return `Ferramenta desconhecida: ${nome}`;
+  }
+}
+
+// ------------------------------------------------------------ system prompt
+
+const systemPrompt = `Você se chama ${config.nome_assistente || 'Assistente'}.
+Fale de forma ${config.tom || 'informal'}.
+Responda em ${config.idioma || 'pt-BR'}.
 
 Você é o assistente pessoal de ${config.nome} pelo WhatsApp.
 
-Hoje é ${new Date().toLocaleDateString("pt-BR")}, fuso de Campo Grande, UTC-4.
+Hoje é ${porExtenso(hoje)} (${dataISO(hoje)}), fuso de Campo Grande, UTC-4.
 
 ## Regras
 - Mensagens curtas, 2 a 6 linhas. Formatação: *negrito*, _itálico_.
 - Use ferramentas quando precisar de dado real. Nunca invente.
 - Pode chamar mais de uma ferramenta antes de responder.
 - Após registrar gasto, consulte o orçamento da categoria.
-- Se o orçamento passou de 80%, alerte. Se passou de 100%, alerte com urgência.
+- Se o orçamento passou de 80%, alerte. Se passou de 100%, alerte com mais urgência.
 - Quando registrar gasto em categoria sem limite, pergunte se quer definir um.
 - Responda direto, sem preâmbulo.
 
 ## Sobre tarefas
 - Títulos começando por verbo no infinitivo.
-- "O que tenho pra hoje" = listar_tarefas(hoje).
+- Prazos em UTC: some 4h ao horário local que o usuário disser.
+- "O que tenho pra hoje" é listar_tarefas com filtro hoje.
 
 ## Sobre contas
 - "Contas para vencer" mostra a pagar e a receber separados.
+- Conta sem gasto correspondente no mês é pendente.
+
+## Áudio
+- Se a mensagem veio de transcrição, interprete pelo contexto.
+- Responda sempre em texto.
 
 ## Limites
 - Não envia e-mail, não apaga nada, não fala com terceiros.
-`;
+- Não dá recomendação de investimento.`;
 
-// Definição das ferramentas
-const tools = [
-  {
-    name: "criar_tarefa",
-    description: "Criar uma tarefa no Trello",
-    input_schema: {
-      type: "object",
-      properties: {
-        titulo: { type: "string", description: "Título da tarefa (verbo no infinitivo)" },
-        descricao: { type: "string", description: "Descrição opcional" },
-        prazo: { type: "string", description: "Prazo em ISO 8601 (opcional)" },
-      },
-      required: ["titulo"],
-    },
-  },
-  {
-    name: "registrar_gasto",
-    description: "Registrar um gasto na planilha",
-    input_schema: {
-      type: "object",
-      properties: {
-        descricao: { type: "string" },
-        valor: { type: "number" },
-        categoria: { type: "string" },
-        data: { type: "string", description: "YYYY-MM-DD (default hoje)" },
-      },
-      required: ["descricao", "valor", "categoria"],
-    },
-  },
-  {
-    name: "registrar_conta",
-    description: "Registrar uma conta a pagar/receber",
-    input_schema: {
-      type: "object",
-      properties: {
-        descricao: { type: "string" },
-        valor: { type: "number" },
-        dia: { type: "number", description: "Dia do mês (1-31)" },
-        categoria: { type: "string" },
-        tipo: { type: "string", enum: ["fixa", "parcelada"] },
-        fluxo: { type: "string", enum: ["pagar", "receber"] },
-      },
-      required: ["descricao", "valor", "dia", "categoria", "tipo", "fluxo"],
-    },
-  },
-  {
-    name: "definir_orcamento",
-    description: "Definir limite de orçamento para uma categoria",
-    input_schema: {
-      type: "object",
-      properties: {
-        categoria: { type: "string" },
-        limite: { type: "number" },
-      },
-      required: ["categoria", "limite"],
-    },
-  },
-  {
-    name: "listar_tarefas",
-    description: "Listar tarefas do Trello",
-    input_schema: {
-      type: "object",
-      properties: {
-        filtro: {
-          type: "string",
-          enum: ["hoje", "semana", "atrasados", "todos"],
-        },
-      },
-      required: ["filtro"],
-    },
-  },
-  {
-    name: "consultar_gastos",
-    description: "Consultar gastos na planilha",
-    input_schema: {
-      type: "object",
-      properties: {
-        periodo: { type: "string", enum: ["ontem", "semana", "mes"] },
-        categoria: { type: "string", description: "Opcional" },
-      },
-      required: ["periodo"],
-    },
-  },
-  {
-    name: "listar_contas",
-    description: "Listar contas a pagar/receber",
-    input_schema: {
-      type: "object",
-      properties: {
-        periodo: {
-          type: "string",
-          enum: ["proximos_dias", "mes", "atrasadas"],
-        },
-      },
-      required: ["periodo"],
-    },
-  },
-  {
-    name: "consultar_orcamento",
-    description: "Consultar orçamento por categoria",
-    input_schema: {
-      type: "object",
-      properties: {
-        categoria: { type: "string", description: "Opcional — se vazio, retorna todas" },
-      },
-    },
-  },
-];
+// -------------------------------------------------------------------- laço
 
-// Loop de tool use
-async function runAgent() {
-  let messages = [
-    {
-      role: "user",
-      content: texto,
+async function chamarClaude(mensagens) {
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': ANTHROPIC_KEY,
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
     },
-  ];
-
-  let voltas = 0;
-  const maxVoltas = 5;
-  let ferramentasUsadas = [];
-
-  while (voltas < maxVoltas) {
-    voltas++;
-    console.log(`[Volta ${voltas}] Chamando Claude...`);
-
-    // Chamar Claude
-    const response = await client.messages.create({
-      model: "claude-sonnet-5",
+    body: JSON.stringify({
+      model: MODELO,
       max_tokens: 1024,
       system: systemPrompt,
-      tools: tools,
-      messages: messages,
-    });
-
-    // Verificar resposta
-    if (response.stop_reason === "end_turn") {
-      // Só texto, retornar
-      const textBlock = response.content.find((b) => b.type === "text");
-      if (textBlock) {
-        return {
-          resposta: textBlock.text,
-          ferramentas_usadas: ferramentasUsadas,
-          voltas: voltas,
-        };
-      }
-    }
-
-    // Processar tool_use
-    if (response.stop_reason === "tool_use") {
-      for (const block of response.content) {
-        if (block.type === "tool_use") {
-          const toolName = block.name;
-          const toolInput = block.input;
-          const toolUseId = block.id;
-
-          console.log(`[Tool] Executando: ${toolName}`, toolInput);
-          ferramentasUsadas.push({
-            ferramenta: toolName,
-            input: toolInput,
-            volta: voltas,
-          });
-
-          // AQUI: Executar a ferramenta
-          // Por enquanto, mock. Em produção: chamar HTTP, Sheets API, etc.
-          let toolResult = `✅ ${toolName} executado com sucesso`;
-
-          // Adicionar à messages para próxima volta
-          messages.push({
-            role: "assistant",
-            content: response.content,
-          });
-
-          messages.push({
-            role: "user",
-            content: [
-              {
-                type: "tool_result",
-                tool_use_id: toolUseId,
-                content: toolResult,
-              },
-            ],
-          });
-        }
-      }
-    }
-  }
-
-  // Se saiu do loop sem resposta
-  return {
-    resposta: "Não consegui concluir a solicitação. Tenta de novo?",
-    ferramentas_usadas: ferramentasUsadas,
-    voltas: voltas,
-  };
+      tools: ferramentas,
+      messages: mensagens,
+    }),
+  });
+  if (!r.ok) throw new Error(`Anthropic ${r.status}: ${await r.text()}`);
+  return r.json();
 }
 
-// Executar
-runAgent().then((resultado) => {
-  return {
-    resposta: resultado.resposta,
-    ferramentas_usadas: resultado.ferramentas_usadas,
-    voltas: resultado.voltas,
-  };
-});
+const mensagens = [{ role: 'user', content: texto }];
+const usadas = [];
+let resposta = 'Não consegui concluir, tenta de novo?';
+let voltas = 0;
+
+while (voltas < MAX_VOLTAS) {
+  voltas++;
+  const r = await chamarClaude(mensagens);
+
+  if (r.stop_reason !== 'tool_use') {
+    const bloco = r.content.find((b) => b.type === 'text');
+    if (bloco) resposta = bloco.text;
+    break;
+  }
+
+  // Registra o turno do modelo antes de devolver os resultados.
+  mensagens.push({ role: 'assistant', content: r.content });
+
+  const resultados = [];
+  for (const bloco of r.content) {
+    if (bloco.type !== 'tool_use') continue;
+    let saida;
+    let erro = false;
+    try {
+      saida = await executar(bloco.name, bloco.input);
+    } catch (e) {
+      saida = `Erro ao executar ${bloco.name}: ${e.message}`;
+      erro = true;
+    }
+    usadas.push({ ferramenta: bloco.name, entrada: bloco.input, saida, volta: voltas });
+    resultados.push({
+      type: 'tool_result',
+      tool_use_id: bloco.id,
+      content: saida,
+      ...(erro ? { is_error: true } : {}),
+    });
+  }
+
+  mensagens.push({ role: 'user', content: resultados });
+}
+
+return [{ json: { resposta, ferramentas_usadas: usadas, voltas } }];
