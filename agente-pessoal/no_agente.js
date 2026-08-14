@@ -39,7 +39,10 @@ const MAX_VOLTAS = 5;
 // Este é o botão que custa dinheiro, não o TTL do Redis: o histórico é
 // reenviado ao modelo a cada mensagem. O TTL só decide por quanto tempo
 // a chave sobrevive; este número decide o tamanho de cada chamada.
-const MAX_HISTORICO = 10;
+//
+// 40 são 20 trocas — cobre um dia de conversa e sobra para o onboarding,
+// que gasta 5 trocas só nas perguntas iniciais.
+const MAX_HISTORICO = 40;
 
 // ------------------------------------------------------------------ rede
 //
