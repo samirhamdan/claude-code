@@ -15,8 +15,8 @@ Não pule para a fase seguinte se a anterior não fechou.
 | 4. Canvas | ✅ 5 nós ligados |
 | 5. Teste por curl | ✅ criar_tarefa e listar_tarefas |
 | 5b. Memória entre turnos | ✅ histórico no Redis, db 2, TTL 1 ano |
-| 6. Google Sheets | ⏳ falta credencial |
-| 7. WhatsApp de verdade | ⏳ |
+| 6. Google Sheets | ✅ OAuth com refresh token |
+| 7. WhatsApp de verdade | ⏳ falta filtro, áudio e apontar a Evolution |
 
 **Provado em produção:** webhook → Postgres → Redis → laço de tool use →
 Anthropic → Trello → WhatsApp → Redis. Card criado com prazo convertido
@@ -44,6 +44,13 @@ Redis resolveu a memória.
   de rede é `this.helpers.httpRequest`.
 - "Execute step" num nó sem entrada põe o Webhook em escuta — parece travado,
   mas está esperando o curl.
+- A aba de gastos da planilha chamava `Untitled`, não `Gastos`. O nó do Sheets
+  no v1 a referencia por ID ("From list"), então renomear não quebrou o v1.
+- Um refresh token gerado com o app OAuth em "Teste" **expira em 7 dias** — a
+  resposta do Google traz `refresh_token_expires_in` quando isso acontece.
+  Publicar o app antes de gerar é o que evita.
+- O `!` do intervalo (`Gastos!A1:D3`) dispara expansão de histórico no bash
+  interativo mesmo entre aspas duplas. Use aspas simples na URL.
 
 ---
 
