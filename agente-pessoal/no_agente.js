@@ -40,9 +40,10 @@ const MAX_VOLTAS = 5;
 // reenviado ao modelo a cada mensagem. O TTL só decide por quanto tempo
 // a chave sobrevive; este número decide o tamanho de cada chamada.
 //
-// 40 são 20 trocas — cobre um dia de conversa e sobra para o onboarding,
-// que gasta 5 trocas só nas perguntas iniciais.
-const MAX_HISTORICO = 40;
+// 20 são 10 trocas: o onboarding gasta 5 nas perguntas iniciais e sobram
+// 5 de folga. Se o agente começar a esquecer algo dito na mesma conversa,
+// é este número que precisa subir.
+const MAX_HISTORICO = 20;
 
 // ------------------------------------------------------------------ rede
 //
