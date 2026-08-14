@@ -16,7 +16,9 @@
  * Requer no docker-compose do n8n:
  *   N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
  * e no .env:
- *   ANTHROPIC_API_KEY, GOOGLE_SHEETS_TOKEN
+ *   ANTHROPIC_API_KEY
+ *   GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET + GOOGLE_REFRESH_TOKEN
+ *   (ou, só para teste rápido, GOOGLE_SHEETS_TOKEN)
  */
 
 const entrada = $input.first().json;
@@ -24,7 +26,6 @@ const config = entrada.config;
 const texto = entrada.texto;
 
 const ANTHROPIC_KEY = $env.ANTHROPIC_API_KEY;
-const SHEETS_TOKEN = $env.GOOGLE_SHEETS_TOKEN;
 
 const MODELO = 'claude-sonnet-5';
 const MAX_VOLTAS = 5;
@@ -64,10 +65,41 @@ async function trello(caminho, metodo = 'GET', params = {}) {
 
 // ------------------------------------------------------------ Google Sheets
 
+// Um access_token do Google vale 1 hora. Se houver refresh_token no .env,
+// trocamos por um token novo a cada execução; senão caímos no token fixo,
+// que serve para testar mas vence sozinho.
+let tokenSheets = null;
+
+async function tokenGoogle() {
+  if (tokenSheets) return tokenSheets;
+
+  const refresh = $env.GOOGLE_REFRESH_TOKEN;
+  if (!refresh) {
+    tokenSheets = $env.GOOGLE_SHEETS_TOKEN;
+    return tokenSheets;
+  }
+
+  const r = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: $env.GOOGLE_CLIENT_ID,
+      client_secret: $env.GOOGLE_CLIENT_SECRET,
+      refresh_token: refresh,
+      grant_type: 'refresh_token',
+    }),
+  });
+  if (!r.ok) throw new Error(`Google OAuth ${r.status}: ${await r.text()}`);
+  tokenSheets = (await r.json()).access_token;
+  return tokenSheets;
+}
+
 async function sheetsLer(aba, intervalo) {
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${config.planilha_id}`
             + `/values/${encodeURIComponent(aba + '!' + intervalo)}`;
-  const r = await fetch(url, { headers: { Authorization: `Bearer ${SHEETS_TOKEN}` } });
+  const r = await fetch(url, {
+    headers: { Authorization: `Bearer ${await tokenGoogle()}` },
+  });
   if (!r.ok) throw new Error(`Sheets ${r.status}: ${await r.text()}`);
   const dados = await r.json();
   return dados.values || [];
@@ -80,7 +112,7 @@ async function sheetsAcrescentar(aba, intervalo, linha) {
   const r = await fetch(url, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${SHEETS_TOKEN}`,
+      Authorization: `Bearer ${await tokenGoogle()}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ values: [linha] }),
