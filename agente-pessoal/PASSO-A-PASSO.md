@@ -14,16 +14,26 @@ Não pule para a fase seguinte se a anterior não fechou.
 | 3. Env no Code node | ✅ |
 | 4. Canvas | ✅ 5 nós ligados |
 | 5. Teste por curl | ✅ criar_tarefa e listar_tarefas |
+| 5b. Memória entre turnos | ✅ histórico no Redis, db 2, TTL 24h |
 | 6. Google Sheets | ⏳ falta credencial |
 | 7. WhatsApp de verdade | ⏳ |
 
-**Provado em produção:** webhook → Postgres → laço de tool use → Anthropic
-→ Trello → WhatsApp. Card criado com prazo convertido certo para UTC
-(14h local → `18:00Z`), e listado de volta no turno seguinte.
+**Provado em produção:** webhook → Postgres → Redis → laço de tool use →
+Anthropic → Trello → WhatsApp → Redis. Card criado com prazo convertido
+certo para UTC (14h local → `18:00Z`), listado de volta no turno seguinte,
+e o agente lembra do turno anterior sem reconsultar o Trello.
 
-**Faltando, além das fases:** onboarding (seção 9 do CLAUDE.md) e memória
-entre mensagens — hoje cada mensagem chega sem o turno anterior, então não
-dá para responder "sim" a uma pergunta que o agente fez.
+**Canvas atual, 7 nós:**
+
+```
+Webhook → Carrega Config → Lê Histórico → Monta Entrada
+        → Agente → Envia WhatsApp → Grava Histórico
+```
+
+**Faltando:** onboarding (seção 9 do CLAUDE.md). Depende de gravar as
+respostas na tabela `usuarios`, e o Code node não alcança o Postgres —
+vai precisar de um nó Postgres depois do Agente, no mesmo padrão que o
+Redis resolveu a memória.
 
 ### Armadilhas já resolvidas, não repetir
 
