@@ -35,6 +35,10 @@ const MAX_VOLTAS = 5;
 
 // Quantas mensagens do histórico mandar de volta. Par, para não cortar
 // um turno do usuário sem a resposta dele — a API exige alternância.
+//
+// Este é o botão que custa dinheiro, não o TTL do Redis: o histórico é
+// reenviado ao modelo a cada mensagem. O TTL só decide por quanto tempo
+// a chave sobrevive; este número decide o tamanho de cada chamada.
 const MAX_HISTORICO = 10;
 
 // ------------------------------------------------------------------ rede
