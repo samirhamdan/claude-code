@@ -33,6 +33,12 @@ const ANTHROPIC_KEY = $env.ANTHROPIC_API_KEY;
 const MODELO = 'claude-sonnet-5';
 const MAX_VOLTAS = 5;
 
+// Quanto o modelo pensa antes de responder. O padrão da API é 'high', que
+// é lento demais para conversa de WhatsApp. Se ele começar a escolher a
+// ferramenta errada, sobe para 'high'; se ainda estiver lento e as escolhas
+// seguirem certas, desce para 'low'.
+const EFFORT = 'medium';
+
 // Quantas mensagens do histórico mandar de volta. Par, para não cortar
 // um turno do usuário sem a resposta dele — a API exige alternância.
 //
@@ -468,6 +474,10 @@ async function chamarClaude(mensagens) {
       system: systemPrompt,
       tools: ferramentas,
       messages: mensagens,
+      // Sem isto o modelo roda em effort `high`, que é o padrão, e pensa
+      // fundo até para decidir que "almoço 45 reais" é um registrar_gasto.
+      // Num laço de três chamadas isso vira dezenas de segundos no WhatsApp.
+      output_config: { effort: EFFORT },
     },
     json: true,
   });

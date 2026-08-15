@@ -16,19 +16,32 @@ Não pule para a fase seguinte se a anterior não fechou.
 | 5. Teste por curl | ✅ criar_tarefa e listar_tarefas |
 | 5b. Memória entre turnos | ✅ histórico no Redis, db 2, TTL 1 ano |
 | 6. Google Sheets | ✅ OAuth com refresh token |
-| 7. WhatsApp de verdade | ⏳ falta filtro, áudio e apontar a Evolution |
+| 7. WhatsApp de verdade | ✅ em produção, texto e áudio |
 
 **Provado em produção:** webhook → Postgres → Redis → laço de tool use →
 Anthropic → Trello → WhatsApp → Redis. Card criado com prazo convertido
 certo para UTC (14h local → `18:00Z`), listado de volta no turno seguinte,
 e o agente lembra do turno anterior sem reconsultar o Trello.
 
-**Canvas atual, 7 nós:**
+**Canvas atual:**
 
 ```
-Webhook → Carrega Config → Lê Histórico → Monta Entrada
-        → Agente → Envia WhatsApp → Grava Histórico
+Webhook → Filtra Mensagem → Texto ou Audio
+                             ├─ (0, texto) ──────────────────────┐
+                             └─ (1, áudio) → Baixa audio →       │
+                                Converte Base64 → Audio          │
+                                transcreve → Monta payload ──────┤
+                                                                 ▼
+                                                        Carrega Config
+                                                                 ↓
+                                         Lê Histórico → Monta Entrada
+                                           → Agente → Envia WhatsApp
+                                           → Grava Histórico
 ```
+
+O v2 assumiu o path `whatsapp-pessoal` da Evolution e o v1 foi desativado —
+a Evolution não precisou ser tocada. Para reverter: despublica o v2, devolve
+o path dele para `agente-v2`, republica o v1.
 
 **Faltando:** onboarding (seção 9 do CLAUDE.md). Depende de gravar as
 respostas na tabela `usuarios`, e o Code node não alcança o Postgres —
