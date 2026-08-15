@@ -274,6 +274,13 @@ const ferramentas = [
       properties: { categoria: { type: 'string' } },
     },
   },
+
+  // Estas duas rodam no servidor da Anthropic, não aqui. Não têm entrada no
+  // `executar()` — chegam já resolvidas dentro da resposta. Por isso não
+  // aparecem em `ferramentas_usadas`; para ver se houve busca, olhe os
+  // blocos server_tool_use na execução.
+  { type: 'web_search_20260209', name: 'web_search' },
+  { type: 'web_fetch_20260209', name: 'web_fetch' },
 ];
 
 // ------------------------------------------------------- execução das tools
@@ -449,6 +456,15 @@ Hoje é ${porExtenso(hoje)} (${dataISO(hoje)}), fuso de Campo Grande, UTC-4.
 - "Contas para vencer" mostra a pagar e a receber separados.
 - Conta sem gasto correspondente no mês é pendente.
 
+## Pesquisa
+- Use web_search quando a resposta depender de informação atual: preço,
+  notícia, horário de funcionamento, disponibilidade, qualquer coisa que possa
+  ter mudado. Nesses casos não responda de memória.
+- Use web_fetch quando o usuário mandar um link e quiser saber o que tem nele.
+- Não pesquise para registrar gasto, criar tarefa, consultar a planilha ou
+  conversar. Essas coisas já têm ferramenta própria ou não precisam de nada.
+- Ao usar resultado de busca, diga de onde veio.
+
 ## Áudio
 - Se a mensagem veio de transcrição, interprete pelo contexto.
 - Responda sempre em texto.
@@ -470,7 +486,9 @@ async function chamarClaude(mensagens) {
     },
     body: {
       model: MODELO,
-      max_tokens: 1024,
+      // Cobre pensamento e texto juntos. 1024 apertava quando entra resultado
+      // de busca para resumir.
+      max_tokens: 2048,
       system: systemPrompt,
       tools: ferramentas,
       messages: mensagens,
@@ -492,9 +510,20 @@ while (voltas < MAX_VOLTAS) {
   voltas++;
   const r = await chamarClaude(mensagens);
 
+  // As ferramentas de servidor (busca) rodam num laço próprio do lado da
+  // Anthropic. Se ele bate o limite interno, a resposta volta com pause_turn
+  // e nenhum texto — é só reenviar a conversa com o turno do modelo no fim,
+  // sem acrescentar mensagem de usuário, que ele retoma de onde parou.
+  if (r.stop_reason === 'pause_turn') {
+    mensagens.push({ role: 'assistant', content: r.content });
+    continue;
+  }
+
   if (r.stop_reason !== 'tool_use') {
-    const bloco = r.content.find((b) => b.type === 'text');
-    if (bloco) resposta = bloco.text;
+    // Resposta com busca costuma vir quebrada em vários blocos de texto,
+    // com os resultados no meio. Pegar só o primeiro entregaria um pedaço.
+    const textos = r.content.filter((b) => b.type === 'text').map((b) => b.text);
+    if (textos.length) resposta = textos.join('');
     break;
   }
 
