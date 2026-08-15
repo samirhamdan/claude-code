@@ -77,6 +77,21 @@ async function http(opcoes) {
   }
 }
 
+// ---------------------------------------------------------- Google Calendar
+
+const CAL = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
+
+async function calendario(opcoes) {
+  return http({
+    ...opcoes,
+    headers: {
+      Authorization: `Bearer ${await tokenGoogle()}`,
+      ...(opcoes.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(opcoes.headers || {}),
+    },
+  });
+}
+
 // ---------------------------------------------------------------- utilidades
 
 // Campo Grande é UTC-4 o ano todo.
@@ -97,6 +112,38 @@ function porExtenso(d) {
 }
 
 const hoje = agoraLocal();
+
+const TZ = 'America/Campo_Grande';
+
+// O modelo sempre passa horário local. A conversão de fuso acontece aqui,
+// não na cabeça dele — pedir aritmética de fuso ao modelo é fonte de erro
+// silencioso, e um compromisso quatro horas fora do lugar não parece bug.
+function dataHoraLocal(s) {
+  const t = String(s).trim().replace(' ', 'T');
+  return /\d{2}:\d{2}:\d{2}$/.test(t) ? t : `${t}:00`;
+}
+
+function paraUTC(local) {
+  const m = String(local).trim().match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
+  if (!m) return null;
+  const [, ano, mes, dia, hora, min] = m;
+  return new Date(Date.UTC(+ano, +mes - 1, +dia, +hora + 4, +min)).toISOString();
+}
+
+// Instante UTC correspondente a uma hora local de Campo Grande.
+function instanteUTC(ano, mes, dia, hora = 0, min = 0) {
+  return new Date(Date.UTC(ano, mes, dia, hora + 4, min)).toISOString();
+}
+
+// Aritmética de calendário sobre a hora local, sem passar por UTC: trata os
+// componentes como se fossem UTC só para somar, e devolve no mesmo formato.
+function somaHoraLocal(local, horas) {
+  const m = String(local).trim().match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
+  if (!m) return null;
+  const [, ano, mes, dia, hora, min] = m;
+  return new Date(Date.UTC(+ano, +mes - 1, +dia, +hora + horas, +min))
+    .toISOString().slice(0, 16);
+}
 
 // ------------------------------------------------------------------- Trello
 
@@ -184,7 +231,11 @@ const ferramentas = [
       properties: {
         titulo: { type: 'string', description: 'Comece por verbo no infinitivo.' },
         descricao: { type: 'string' },
-        prazo: { type: 'string', description: 'ISO 8601 em UTC. Some 4h ao horário local.' },
+        prazo: {
+          type: 'string',
+          description: 'AAAA-MM-DDTHH:MM em horário local de Campo Grande. '
+                     + 'Não converta fuso.',
+        },
       },
       required: ['titulo'],
     },
@@ -275,6 +326,52 @@ const ferramentas = [
     },
   },
 
+  {
+    name: 'criar_evento',
+    description: 'Cria um compromisso na agenda do Google. Use para reunião, '
+               + 'consulta, viagem — coisas com hora marcada. Para algo que só '
+               + 'precisa ser feito até certo dia, use criar_tarefa.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        titulo: { type: 'string' },
+        inicio: {
+          type: 'string',
+          description: 'AAAA-MM-DDTHH:MM em horário local de Campo Grande. '
+                     + 'Não converta fuso — passe a hora que o usuário disse.',
+        },
+        fim: {
+          type: 'string',
+          description: 'Mesmo formato. Omita para uma hora depois do início.',
+        },
+        local: { type: 'string' },
+        descricao: { type: 'string' },
+      },
+      required: ['titulo', 'inicio'],
+    },
+  },
+  {
+    name: 'listar_eventos',
+    description: 'Lista os compromissos da agenda num período.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        periodo: { type: 'string', enum: ['hoje', 'amanha', 'semana'] },
+      },
+      required: ['periodo'],
+    },
+  },
+  {
+    name: 'cancelar_evento',
+    description: 'Cancela um compromisso. O id vem de listar_eventos — chame '
+               + 'listar_eventos antes se não tiver o id em mãos.',
+    input_schema: {
+      type: 'object',
+      properties: { evento_id: { type: 'string' } },
+      required: ['evento_id'],
+    },
+  },
+
   // Estas duas rodam no servidor da Anthropic, não aqui. Não têm entrada no
   // `executar()` — chegam já resolvidas dentro da resposta. Por isso não
   // aparecem em `ferramentas_usadas`; para ver se houve busca, olhe os
@@ -289,13 +386,77 @@ async function executar(nome, args) {
   switch (nome) {
 
     case 'criar_tarefa': {
+      const due = args.prazo ? paraUTC(args.prazo) : null;
       const card = await trello('/cards', 'POST', {
         idList: config.trello_list_id,
         name: args.titulo,
         ...(args.descricao ? { desc: args.descricao } : {}),
-        ...(args.prazo ? { due: args.prazo } : {}),
+        ...(due ? { due } : {}),
       });
       return `Card criado: "${card.name}" (${card.shortUrl})`;
+    }
+
+    case 'criar_evento': {
+      const inicio = dataHoraLocal(args.inicio);
+      const fimLocal = dataHoraLocal(args.fim || somaHoraLocal(args.inicio, 1));
+
+      const ev = await calendario({
+        method: 'POST',
+        url: CAL,
+        body: {
+          summary: args.titulo,
+          start: { dateTime: inicio, timeZone: TZ },
+          end: { dateTime: fimLocal, timeZone: TZ },
+          ...(args.local ? { location: args.local } : {}),
+          ...(args.descricao ? { description: args.descricao } : {}),
+        },
+        json: true,
+      });
+      return `Compromisso criado: "${ev.summary}" em ${inicio.slice(0, 16).replace('T', ' ')}.`;
+    }
+
+    case 'listar_eventos': {
+      const A = hoje.getUTCFullYear();
+      const M = hoje.getUTCMonth();
+      const D = hoje.getUTCDate();
+
+      let timeMin = instanteUTC(A, M, D, 0, 0);
+      let timeMax = instanteUTC(A, M, D, 23, 59);
+      if (args.periodo === 'amanha') {
+        timeMin = instanteUTC(A, M, D + 1, 0, 0);
+        timeMax = instanteUTC(A, M, D + 1, 23, 59);
+      }
+      if (args.periodo === 'semana') {
+        timeMax = instanteUTC(A, M, D + 7, 23, 59);
+      }
+
+      const r = await calendario({
+        method: 'GET',
+        url: `${CAL}?${qs({
+          timeMin,
+          timeMax,
+          singleEvents: 'true',
+          orderBy: 'startTime',
+          maxResults: '25',
+        })}`,
+        json: true,
+      });
+
+      const itens = r.items || [];
+      if (!itens.length) return 'Nenhum compromisso no período.';
+      return itens.map((e) => {
+        const quando = e.start?.dateTime || e.start?.date || '';
+        return `- ${e.summary || '(sem título)'} — ${quando.slice(0, 16).replace('T', ' ')}`
+             + ` [id ${e.id}]`;
+      }).join('\n');
+    }
+
+    case 'cancelar_evento': {
+      await calendario({
+        method: 'DELETE',
+        url: `${CAL}/${encodeURIComponent(args.evento_id)}`,
+      });
+      return 'Compromisso cancelado.';
     }
 
     case 'listar_tarefas': {
@@ -447,10 +608,14 @@ Hoje é ${porExtenso(hoje)} (${dataISO(hoje)}), fuso de Campo Grande, UTC-4.
 - Quando registrar gasto em categoria sem limite, pergunte se quer definir um.
 - Responda direto, sem preâmbulo.
 
-## Sobre tarefas
-- Títulos começando por verbo no infinitivo.
-- Prazos em UTC: some 4h ao horário local que o usuário disser.
-- "O que tenho pra hoje" é listar_tarefas com filtro hoje.
+## Sobre tarefas e agenda
+- Títulos de tarefa começando por verbo no infinitivo.
+- **Datas e horas sempre no horário local que o usuário falou.** Não converta
+  fuso — a conversão é feita depois de você.
+- Compromisso com hora marcada é evento na agenda. Coisa a fazer até certo
+  dia é tarefa. "Reunião com o João terça 15h" é evento; "ligar pro João até
+  terça" é tarefa.
+- "O que tenho pra hoje" pede as duas coisas: listar_eventos e listar_tarefas.
 
 ## Sobre contas
 - "Contas para vencer" mostra a pagar e a receber separados.
