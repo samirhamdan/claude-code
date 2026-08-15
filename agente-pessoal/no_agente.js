@@ -28,6 +28,11 @@ const texto = entrada.texto;
 // Turnos anteriores, vindos do Redis pelo nó Lê Histórico.
 const historico = Array.isArray(entrada.historico) ? entrada.historico : [];
 
+// Fatos duradouros sobre o usuário, do nó Lê Fatos. Diferente do histórico:
+// não expira por idade, entra inteiro no system prompt, e é o modelo que
+// decide o que merece virar fato.
+const fatos = Array.isArray(entrada.fatos) ? entrada.fatos.slice() : [];
+
 const ANTHROPIC_KEY = $env.ANTHROPIC_API_KEY;
 
 const MODELO = 'claude-sonnet-5';
@@ -50,6 +55,10 @@ const EFFORT = 'medium';
 // 5 de folga. Se o agente começar a esquecer algo dito na mesma conversa,
 // é este número que precisa subir.
 const MAX_HISTORICO = 20;
+
+// Teto de fatos guardados. Todos vão no system prompt em toda chamada, então
+// o custo é linear e permanente — a ~15 tokens por fato, 50 dá uns 750 tokens.
+const MAX_FATOS = 50;
 
 // ------------------------------------------------------------------ rede
 //
@@ -327,6 +336,37 @@ const ferramentas = [
   },
 
   {
+    name: 'lembrar_fato',
+    description: 'Guarda um fato duradouro sobre o usuário, para lembrar em '
+               + 'conversas futuras: preferências, pessoas e o papel delas, '
+               + 'rotinas, decisões tomadas, restrições. Use quando aparecer '
+               + 'algo que valeria saber daqui a meses. Não use para o que já '
+               + 'tem ferramenta: gasto, conta, tarefa e compromisso vão nas '
+               + 'delas, não aqui.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        fato: {
+          type: 'string',
+          description: 'Uma frase curta que se entenda sozinha, sem depender '
+                     + 'do contexto da conversa. "O João é o fornecedor de '
+                     + 'peças", não "ele é o fornecedor".',
+        },
+      },
+      required: ['fato'],
+    },
+  },
+  {
+    name: 'esquecer_fato',
+    description: 'Remove um fato que deixou de valer. Passe o texto como ele '
+               + 'aparece na lista de fatos.',
+    input_schema: {
+      type: 'object',
+      properties: { fato: { type: 'string' } },
+      required: ['fato'],
+    },
+  },
+  {
     name: 'criar_evento',
     description: 'Cria um compromisso na agenda do Google. Use para reunião, '
                + 'consulta, viagem — coisas com hora marcada. Para algo que só '
@@ -394,6 +434,28 @@ async function executar(nome, args) {
         ...(due ? { due } : {}),
       });
       return `Card criado: "${card.name}" (${card.shortUrl})`;
+    }
+
+    case 'lembrar_fato': {
+      const f = String(args.fato || '').trim();
+      if (!f) return 'Fato vazio, nada guardado.';
+      if (fatos.some((x) => x.toLowerCase() === f.toLowerCase())) {
+        return 'Isso já estava guardado.';
+      }
+      if (fatos.length >= MAX_FATOS) {
+        return `Já são ${MAX_FATOS} fatos guardados, que é o limite. Pergunte `
+             + 'ao usuário o que pode ser esquecido antes de guardar mais.';
+      }
+      fatos.push(f);
+      return `Guardado: ${f}`;
+    }
+
+    case 'esquecer_fato': {
+      const alvo = String(args.fato || '').trim().toLowerCase();
+      const i = fatos.findIndex((x) => x.toLowerCase() === alvo);
+      if (i === -1) return 'Não achei esse fato na lista.';
+      const [removido] = fatos.splice(i, 1);
+      return `Esquecido: ${removido}`;
     }
 
     case 'criar_evento': {
@@ -636,7 +698,18 @@ Hoje é ${porExtenso(hoje)} (${dataISO(hoje)}), fuso de Campo Grande, UTC-4.
 
 ## Limites
 - Não envia e-mail, não apaga nada, não fala com terceiros.
-- Não dá recomendação de investimento.`;
+- Não dá recomendação de investimento.
+
+## Fatos
+- Quando o usuário contar algo que valeria saber daqui a meses — uma
+  preferência, quem é alguém, uma rotina, uma decisão — guarde com
+  lembrar_fato. Não peça permissão, só guarde e siga a conversa.
+- Não guarde o que já vai para outra ferramenta, nem o que só vale hoje.
+- Se um fato guardado contradisser algo novo, esqueça o antigo.`
++ (fatos.length
+    ? `\n\n## O que você já sabe sobre ${config.nome}\n`
+      + fatos.map((f) => `- ${f}`).join('\n')
+    : '');
 
 // -------------------------------------------------------------------- laço
 
@@ -733,5 +806,6 @@ return [{
     ferramentas_usadas: usadas,
     voltas,
     historico: JSON.stringify(historicoNovo),
+    fatos: JSON.stringify(fatos),
   },
 }];
