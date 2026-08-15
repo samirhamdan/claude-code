@@ -114,6 +114,26 @@ Cada uma dessas é entregável sozinha. Nenhuma exige refazer o que existe.
 
 ---
 
+## Sobre RAG
+
+Viável tecnicamente — o Postgres já está de pé e `pgvector` é uma extensão.
+Mas hoje seria a ferramenta errada em dois dos três casos.
+
+| Dado | RAG serve? | Por quê |
+|---|---|---|
+| Planilha, Trello, contas | **Não** | É consulta exata, não busca aproximada. "Quanto gastei em julho" é uma soma de linhas. Recuperar por similaridade daria resposta pior que a ferramenta atual. |
+| Histórico de conversa | **Não** | O que se quer de um ano de conversa é o *fato* que ficou nela, não a conversa. Fato guardado está sempre lá; fato recuperado por similaridade vem com ruído e às vezes não vem. |
+| Documentos (competência 7) | **Sim** | Texto corrido, acervo que não cabe no contexto, sem estrutura consultável. É o problema que RAG resolve bem. |
+
+A camada de fatos é uma recuperação curada — a curadoria acontece na
+**escrita**, feita pelo modelo quando aprende a coisa, em vez de na leitura
+por similaridade. Para escala de assistente pessoal isso ganha de RAG quase
+sempre, e custa uma fração.
+
+Conclusão: não agora. Reavaliar quando existir acervo de documentos.
+
+---
+
 ## O que não fazer
 
 **Não construir a matriz de 100 funções antes de construir a primeira.**
