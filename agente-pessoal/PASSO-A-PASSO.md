@@ -42,6 +42,39 @@ Webhook → Filtra Mensagem → Texto ou Audio
 O código de `Monta Entrada` está em `agente-pessoal/monta_entrada.js`; o do
 `Agente`, em `agente-pessoal/no_agente.js`.
 
+### Código de nó: o .js manda, o JSON é gerado
+
+O n8n não tem import — o código de um nó Code mora dentro do JSON do
+workflow. O `Agente` existe em dois workflows (`Agente Pessoal v2` e
+`Resumo do Dia`), e manter as duas cópias na mão já falhou uma vez: a do
+`Resumo do Dia` passou semanas sem `concluir_tarefa` e `arquivar_tarefa`.
+
+Agora a fonte é o `.js` e o JSON é gerado a partir dele:
+
+```bash
+node scripts/n8n-sync-code.mjs           # injeta os .js nos JSON
+node scripts/n8n-sync-code.mjs --check   # só acusa divergência, sai 1
+```
+
+Ferramenta nova se edita em **um** lugar: `no_agente.js`, depois `sync-code`,
+depois sobe pela API REST do n8n.
+
+Para trazer um workflow do n8n para o repo — é assim que o resto do canvas
+sai de dentro da VPS:
+
+```bash
+export N8N_DOMAIN=hub67.duckdns.org
+export N8N_API_KEY=...            # Settings → API dentro do n8n
+scripts/n8n-pull.sh                                   # lista id e nome
+scripts/n8n-pull.sh <id> agente-pessoal/agente-v2.json
+```
+
+O `n8n-pull.sh` descarta `id`, `versionId`, `createdAt`, `updatedAt` e
+`active`, que mudam a cada salvamento, e esvazia o `pinData`, que é dado de
+teste e no v2 carrega payload real de WhatsApp — telefone e conteúdo de
+mensagem. Depois de baixar o v2, acrescente as linhas dele ao `MAPA` do
+`n8n-sync-code.mjs`.
+
 O v2 assumiu o path `whatsapp-pessoal` da Evolution e o v1 foi desativado —
 a Evolution não precisou ser tocada. Para reverter: despublica o v2, devolve
 o path dele para `agente-v2`, republica o v1.
@@ -50,6 +83,11 @@ o path dele para `agente-v2`, republica o v1.
 respostas na tabela `usuarios`, e o Code node não alcança o Postgres —
 vai precisar de um nó Postgres depois do Agente, no mesmo padrão que o
 Redis resolveu a memória.
+
+**Faltando também:** o export do `Agente Pessoal v2`. O `scripts/n8n-pull.sh`
+já faz o download, mas ele precisa rodar contra a VPS com `N8N_API_KEY` no
+ambiente — até lá, `Filtra Mensagem`, `Texto ou Audio`, `Converte Base64` e
+`Monta payload audio` continuam existindo só dentro do n8n.
 
 ### Armadilhas já resolvidas, não repetir
 
@@ -78,6 +116,12 @@ Redis resolveu a memória.
   `Monta Entrada` tem `fatos_raw` e já perdeu `historico_raw`. Ler o
   histórico de `$input` não dá erro — dá histórico vazio, que é pior. Leia
   pelo nome do nó: `$('Lê Histórico').first().json.historico_raw`.
+- **Regra do prompt que contradiz uma ferramenta o modelo contorna sozinho, e
+  de um jeito diferente a cada chamada.** O `## Limites` seguiu dizendo "não
+  apaga nada" depois que `cancelar_evento`, `arquivar_tarefa` e
+  `esquecer_fato` já existiam; perguntado o que fazia, o agente reescreveu a
+  regra para "não apago sem você pedir". Acertou dessa vez — podia ter
+  recusado um cancelamento legítimo. Ferramenta nova pede passada no prompt.
 
 ---
 
