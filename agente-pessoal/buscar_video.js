@@ -1,8 +1,9 @@
 /**
- * Escolhe o vídeo do dia no canal da igreja, comparando com a leitura do
- * plano. O canal publica mais de um vídeo por dia às vezes (séries
- * diferentes), então "o mais recente" não é confiável — precisa comparar
- * com o que está sendo lido.
+ * Escolhe o(s) vídeo(s) do dia no canal da igreja, comparando com a leitura
+ * do plano. Um dia de leitura pode cobrir vários capítulos e o canal às
+ * vezes publica um vídeo por capítulo — por isso isto devolve uma LISTA,
+ * não um único vídeo, e é o modelo quem decide quantos pertencem à leitura
+ * de hoje, sem contagem de capítulo feita aqui no código.
  *
  * Nó Code, modo "Run Once for All Items". Precisa rodar DEPOIS do nó
  * "Buscar Leitura" (encadeado, não em paralelo) — é dele que vem a leitura
@@ -31,7 +32,7 @@ async function http(opcoes) {
 // ── leitura do dia, vinda do nó anterior ──────────────────────────────────
 const leituraRows = $(NOME_NO_LEITURA).all();
 if (!leituraRows.length) {
-  return [{ json: { encontrou: false, motivo: 'sem leitura de hoje para comparar' } }];
+  return [{ json: { encontrou: false, videos: [], motivo: 'sem leitura de hoje para comparar' } }];
 }
 const leitura = leituraRows[0].json;
 const referencia = `${leitura.Livro} ${leitura.Capitulos}`;
@@ -59,15 +60,13 @@ const candidatos = blocos
   .filter((c) => c.publicadoLocal === hojeLocal && c.link.includes('v='));
 
 if (!candidatos.length) {
-  return [{ json: { encontrou: false, motivo: 'nenhum vídeo publicado hoje' } }];
+  return [{ json: { encontrou: false, videos: [], motivo: 'nenhum vídeo publicado hoje' } }];
 }
 
-if (candidatos.length === 1) {
-  // só um candidato — nada para comparar, usa direto
-  return [{ json: { encontrou: true, titulo: candidatos[0].titulo, link: candidatos[0].link } }];
-}
-
-// ── mais de um vídeo hoje: pergunta ao modelo qual bate com a leitura ────
+// ── pergunta ao modelo quais candidatos pertencem à leitura de hoje ──────
+// Sempre passa pelo modelo, mesmo com 1 candidato só: um único vídeo
+// publicado não significa que é o certo — pode ser de outra série, e a
+// leitura de hoje pode ainda não ter vídeo nenhum.
 const resp = await http({
   method: 'POST',
   url: 'https://api.anthropic.com/v1/messages',
@@ -78,10 +77,13 @@ const resp = await http({
   },
   body: {
     model: 'claude-haiku-4-5',
-    max_tokens: 20,
-    system: 'Você escolhe, numa lista numerada de vídeos, qual corresponde à '
-          + 'leitura bíblica do dia. Responda só o número. Se nenhum título '
-          + 'tiver relação com a leitura, responda "nenhum".',
+    max_tokens: 40,
+    system: 'Você identifica, numa lista numerada de vídeos, quais pertencem '
+          + 'à leitura bíblica do dia. A leitura pode ter mais de um capítulo, '
+          + 'e às vezes há um vídeo por capítulo — nesse caso, mais de um item '
+          + 'da lista pode pertencer à leitura. Responda só com os números que '
+          + 'pertencem, separados por vírgula (ex: "2,3"), ou "nenhum" se '
+          + 'nenhum título tiver relação com a leitura.',
     messages: [{
       role: 'user',
       content: `Leitura de hoje: ${referencia}\n\nVídeos publicados hoje:\n`
@@ -92,11 +94,27 @@ const resp = await http({
 });
 
 const texto = (resp.content || []).map((b) => b.text || '').join('').trim().toLowerCase();
-const num = parseInt((texto.match(/\d+/) || [])[0], 10);
-const escolhido = candidatos[num - 1];
+const numeros = [...new Set(
+  [...texto.matchAll(/\d+/g)]
+    .map((m) => parseInt(m[0], 10))
+    .filter((n) => n >= 1 && n <= candidatos.length)
+)];
 
-if (!escolhido) {
-  return [{ json: { encontrou: false, motivo: `nenhum dos ${candidatos.length} vídeos de hoje bate com "${referencia}"` } }];
+const escolhidos = numeros.map((n) => candidatos[n - 1]);
+
+if (!escolhidos.length) {
+  return [{
+    json: {
+      encontrou: false,
+      videos: [],
+      motivo: `nenhum dos ${candidatos.length} vídeos de hoje bate com "${referencia}"`,
+    },
+  }];
 }
 
-return [{ json: { encontrou: true, titulo: escolhido.titulo, link: escolhido.link } }];
+return [{
+  json: {
+    encontrou: true,
+    videos: escolhidos.map((v) => ({ titulo: v.titulo, link: v.link })),
+  },
+}];
