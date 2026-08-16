@@ -1,17 +1,20 @@
 /**
- * Lê um intervalo de planilha usando as credenciais do .env, no mesmo padrão
- * do nó Agente. Substitui o nó Google Sheets do n8n e dispensa a credencial
- * OAuth dele — uma fonte de autenticação a menos para manter.
+ * Substitui o nó Google Sheets "Get Row(s)" com filtro, usando as credenciais
+ * do .env em vez da credencial OAuth do n8n — uma fonte de autenticação a
+ * menos para manter.
+ *
+ * Devolve a linha como objeto com as chaves do cabeçalho, igual ao nó do n8n,
+ * para os nós seguintes não precisarem mudar.
  *
  * Nó Code, modo "Run Once for All Items".
- *
- * Requer no container: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET e
- * GOOGLE_REFRESH_TOKEN — já estão lá desde o agente.
+ * Requer no container: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
+ * GOOGLE_REFRESH_TOKEN.
  */
 
 // ─── preencher ───────────────────────────────────────────────────────────
-const PLANILHA = 'COLE_AQUI_O_ID_DA_PLANILHA';
-const INTERVALO = 'NomeDaAba!A:C';
+const PLANILHA = 'COLE_O_ID_COMPLETO';   // começa com 19TikjVLF_5o_MaN8LWgPXNR
+const ABA = 'Untitled';
+const COLUNA_FILTRO = 'Data';            // cabeçalho da coluna de data
 // ─────────────────────────────────────────────────────────────────────────
 
 const ctx = this;
@@ -51,26 +54,43 @@ const token = (typeof resp === 'string' ? JSON.parse(resp) : resp).access_token;
 const dados = await http({
   method: 'GET',
   url: `https://sheets.googleapis.com/v4/spreadsheets/${PLANILHA}`
-     + `/values/${encodeURIComponent(INTERVALO)}`,
+     + `/values/${encodeURIComponent(`${ABA}!A:Z`)}`,
   headers: { Authorization: `Bearer ${token}` },
   json: true,
 });
 
 const linhas = dados.values || [];
+if (!linhas.length) {
+  throw new Error(`A aba "${ABA}" voltou vazia. Confira o nome da aba e o id da planilha.`);
+}
 
-// ─── busca da linha de hoje ──────────────────────────────────────────────
-// Ajustar ao formato real da coluna de data. Este trecho assume D/M sem zero
-// à esquerda ("5/9"), que é o formato do plano de leitura.
-const hoje = new Date(Date.now() - 4 * 60 * 60 * 1000); // Campo Grande, UTC-4
-const chave = `${hoje.getUTCDate()}/${hoje.getUTCMonth() + 1}`;
+const cabecalho = linhas[0].map((c) => String(c).trim());
+const iFiltro = cabecalho.indexOf(COLUNA_FILTRO);
+if (iFiltro === -1) {
+  throw new Error(
+    `Coluna "${COLUNA_FILTRO}" não existe. Cabeçalho lido: ${cabecalho.join(', ')}`
+  );
+}
 
-const linha = linhas.find((l) => String(l[0] || '').trim() === chave);
+// Mesma chave que o nó antigo montava: $now em Campo Grande, formato d/M.
+// Sem zero à esquerda — "16/8", não "16/08".
+const agora = new Date(Date.now() - 4 * 60 * 60 * 1000);
+const chave = `${agora.getUTCDate()}/${agora.getUTCMonth() + 1}`;
 
-return [{
-  json: {
-    encontrou: Boolean(linha),
-    data: chave,
-    colunas: linha || [],
-    total_linhas: linhas.length,
-  },
-}];
+const linha = linhas.slice(1).find(
+  (l) => String(l[iFiltro] || '').trim() === chave
+);
+
+if (!linha) {
+  // Sem linha para hoje não é erro: o plano pode simplesmente não cobrir a data.
+  // Quem monta a mensagem decide se omite a seção.
+  return [{ json: { encontrou: false, [COLUNA_FILTRO]: chave } }];
+}
+
+// Monta o objeto com as chaves do cabeçalho, como o nó do n8n devolvia.
+const item = { encontrou: true };
+cabecalho.forEach((nome, i) => {
+  if (nome) item[nome] = linha[i] ?? '';
+});
+
+return [{ json: item }];
