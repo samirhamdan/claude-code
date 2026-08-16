@@ -34,10 +34,13 @@ Webhook → Filtra Mensagem → Texto ou Audio
                                                                  ▼
                                                         Carrega Config
                                                                  ↓
-                                         Lê Histórico → Monta Entrada
+                                Lê Histórico → Lê Fatos → Monta Entrada
                                            → Agente → Envia WhatsApp
                                            → Grava Histórico
 ```
+
+O código de `Monta Entrada` está em `agente-pessoal/monta_entrada.js`; o do
+`Agente`, em `agente-pessoal/no_agente.js`.
 
 O v2 assumiu o path `whatsapp-pessoal` da Evolution e o v1 foi desativado —
 a Evolution não precisou ser tocada. Para reverter: despublica o v2, devolve
@@ -64,6 +67,17 @@ Redis resolveu a memória.
   Publicar o app antes de gerar é o que evita.
 - O `!` do intervalo (`Gastos!A1:D3`) dispara expansão de histórico no bash
   interativo mesmo entre aspas duplas. Use aspas simples na URL.
+- **Referenciar com `$('nome')` um nó que não rodou derruba o nó inteiro.**
+  Numa mensagem de texto o ramo de áudio fica todo sem executar, então ler
+  `$('Monta payload audio')` direto quebra o `Monta Entrada`. A guarda é
+  `$('nome').isExecuted` antes do `.first()`, dentro de try/catch.
+  No painel INPUT dá para reconhecer: nó que rodou mostra "1 item", nó que
+  não rodou não mostra contagem nenhuma.
+- **O nó Redis devolve só a propriedade que setou, e descarta o resto do
+  item.** Com `Lê Histórico` e `Lê Fatos` em série, o item que chega no
+  `Monta Entrada` tem `fatos_raw` e já perdeu `historico_raw`. Ler o
+  histórico de `$input` não dá erro — dá histórico vazio, que é pior. Leia
+  pelo nome do nó: `$('Lê Histórico').first().json.historico_raw`.
 
 ---
 
@@ -219,7 +233,8 @@ SELECT * FROM usuarios WHERE numero = '{{ $json.body.numero }}' AND ativo = true
 
 ### Nó 3 — Monta Entrada (Code)
 
-O nó Agente espera `texto` e `config` no mesmo item:
+O nó Agente espera `texto` e `config` no mesmo item. Nesta fase, com cinco
+nós e sem Redis, isso é o suficiente:
 
 ```javascript
 return [{
@@ -230,6 +245,11 @@ return [{
   }
 }];
 ```
+
+> **No canvas atual isto já não basta.** Depois que entraram o ramo de áudio,
+> o `Lê Histórico` e o `Lê Fatos`, a versão que vale é
+> `agente-pessoal/monta_entrada.js` — ela acrescenta `historico` e `fatos` e
+> trata o ramo de áudio como opcional. Veja as duas armadilhas no topo.
 
 ### Nó 4 — Agente (Code)
 
