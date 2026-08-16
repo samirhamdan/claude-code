@@ -261,6 +261,29 @@ const ferramentas = [
     },
   },
   {
+    name: 'concluir_tarefa',
+    description: 'Marca uma tarefa como concluída, sem apagar o card. Use '
+               + 'quando o usuário disser que terminou algo. O id vem de '
+               + 'listar_tarefas — chame listar_tarefas antes se não tiver '
+               + 'o id em mãos.',
+    input_schema: {
+      type: 'object',
+      properties: { tarefa_id: { type: 'string' } },
+      required: ['tarefa_id'],
+    },
+  },
+  {
+    name: 'arquivar_tarefa',
+    description: 'Remove uma tarefa do quadro sem marcar como concluída — use '
+               + 'quando foi cancelada ou não vai mais ser feita. O id vem de '
+               + 'listar_tarefas.',
+    input_schema: {
+      type: 'object',
+      properties: { tarefa_id: { type: 'string' } },
+      required: ['tarefa_id'],
+    },
+  },
+  {
     name: 'registrar_gasto',
     description: 'Grava um gasto na aba Gastos. Depois consulte o orçamento da categoria.',
     input_schema: {
@@ -523,7 +546,7 @@ async function executar(nome, args) {
 
     case 'listar_tarefas': {
       const cards = await trello(`/boards/${config.trello_board_id}/cards`, 'GET', {
-        fields: 'name,due,dueComplete,shortUrl',
+        fields: 'id,name,due,dueComplete,shortUrl',
       });
       const limite = new Date(hoje);
       if (args.filtro === 'hoje') limite.setUTCHours(23, 59, 59);
@@ -540,8 +563,18 @@ async function executar(nome, args) {
 
       if (!filtrados.length) return 'Nenhuma tarefa nesse filtro.';
       return filtrados
-        .map((c) => `- ${c.name}${c.due ? ` (vence ${c.due.slice(0, 10)})` : ''}`)
+        .map((c) => `- ${c.name}${c.due ? ` (vence ${c.due.slice(0, 10)})` : ''} [id ${c.id}]`)
         .join('\n');
+    }
+
+    case 'concluir_tarefa': {
+      await trello(`/cards/${args.tarefa_id}`, 'PUT', { dueComplete: 'true' });
+      return 'Tarefa marcada como concluída.';
+    }
+
+    case 'arquivar_tarefa': {
+      await trello(`/cards/${args.tarefa_id}`, 'PUT', { closed: 'true' });
+      return 'Tarefa arquivada.';
     }
 
     case 'registrar_gasto': {
@@ -678,6 +711,9 @@ Hoje é ${porExtenso(hoje)} (${dataISO(hoje)}), fuso de Campo Grande, UTC-4.
   dia é tarefa. "Reunião com o João terça 15h" é evento; "ligar pro João até
   terça" é tarefa.
 - "O que tenho pra hoje" pede as duas coisas: listar_eventos e listar_tarefas.
+- Quando o usuário disser que terminou algo, use concluir_tarefa. Quando
+  disser que cancelou ou não vai mais fazer, use arquivar_tarefa. Se não
+  tiver o id da tarefa na conversa, chame listar_tarefas primeiro.
 
 ## Sobre contas
 - "Contas para vencer" mostra a pagar e a receber separados.
