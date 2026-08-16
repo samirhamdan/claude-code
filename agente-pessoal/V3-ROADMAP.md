@@ -22,12 +22,20 @@ Isso barateia radicalmente o que é *integração*. Não barateia nada do que é
 |---|---|---|
 | 2 | Gestão de tarefas | `criar_tarefa`, `listar_tarefas` — Trello |
 | 9 | Organização financeira | `registrar_gasto`, `registrar_conta`, `listar_contas`, `consultar_orcamento`, `definir_orcamento` — planilha |
+| 8 | Pesquisa na internet | `web_search`, `web_fetch` — server-side, sem executor |
+| 1 | Agenda | `criar_evento`, `listar_eventos`, `cancelar_evento` — Google Calendar |
+| 10 | Memória pessoal | histórico no Redis + `lembrar_fato` / `esquecer_fato` |
+| 3 | Lembretes | workflow `Resumo do Dia`, cron diário |
+
+Restam nove das quinze. As seis acima foram feitas em uma sessão, o que é
+menos sobre velocidade e mais sobre o laço de tool use: cinco delas foram
+ferramenta nova em arquivo existente, sem tocar no fluxo.
 
 ---
 
 ## Ordem de construção
 
-### 1. Pesquisa na internet (#8) — trivial
+### 1. Pesquisa na internet (#8) — ✅ feito
 
 **A mais barata da lista, e de uso diário.**
 
@@ -48,7 +56,7 @@ O `web_fetch` complementa: lê uma URL específica que apareceu na conversa.
 - **Cuidado:** os resultados entram no contexto e são a maior fonte de token
   desta lista. A versão `_20260209` filtra antes de entregar, o que ajuda.
 
-### 2. Agenda (#1) — baixa
+### 2. Agenda (#1) — ✅ feito
 
 Maior buraco funcional hoje. Não se administra o dia de alguém sem ver a
 agenda dela.
@@ -59,7 +67,7 @@ agenda dela.
 - **Depende de:** nada
 - **Destrava:** lembretes (#3), planejamento (#15), reuniões
 
-### 3. Memória de fatos (#10) — baixa
+### 3. Memória de fatos (#10) — ✅ feito
 
 O v2 lembra da **conversa**, não lembra **de você**. "A internet vence dia
 10", "o João é o fornecedor de peças" — isso é fato, não histórico.
@@ -72,7 +80,7 @@ O v2 lembra da **conversa**, não lembra **de você**. "A internet vence dia
 - **Destrava:** planejamento pessoal (#15), e é o que faz o agente parecer
   pessoal em vez de genérico
 
-### 4. Lembretes ativos (#3) — baixa
+### 4. Lembretes ativos (#3) — ✅ feito (workflow Resumo do Dia)
 
 Hoje existe prazo no card do Trello, mas ninguém cobra. Falta a cobrança.
 
