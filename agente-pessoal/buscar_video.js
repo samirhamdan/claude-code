@@ -1,18 +1,19 @@
 /**
- * Busca o vídeo mais recente do canal da igreja via feed RSS do YouTube.
- * Sem API key, sem credencial — GET simples num feed público.
+ * Escolhe o vídeo do dia no canal da igreja, comparando com a leitura do
+ * plano. O canal publica mais de um vídeo por dia às vezes (séries
+ * diferentes), então "o mais recente" não é confiável — precisa comparar
+ * com o que está sendo lido.
  *
- * Nó Code, modo "Run Once for All Items".
+ * Nó Code, modo "Run Once for All Items". Precisa rodar DEPOIS do nó
+ * "Buscar Leitura" (encadeado, não em paralelo) — é dele que vem a leitura
+ * para comparar.
  *
- * O canal publica por volta das 8h. Se este workflow roda antes disso,
- * o vídeo do dia ainda não existe — por isso o nó confere se o mais
- * recente do feed foi publicado HOJE, em vez de aceitar qualquer um.
- * O ideal é o Cron deste workflow rodar depois das 8h (ex.: 8:15), com
- * folga; esta checagem é uma proteção a mais, não substitui isso.
+ * Requer no container: ANTHROPIC_API_KEY (já está lá, usada pelo Agente).
  */
 
 // ─── preencher ───────────────────────────────────────────────────────────
 const CHANNEL_ID = 'UCyjFCsUVfRQsE262-xbaS7w'; // Igreja Batista Central CG
+const NOME_NO_LEITURA = 'Buscar Leitura';       // nome exato do nó no canvas
 // ─────────────────────────────────────────────────────────────────────────
 
 const ctx = this;
@@ -27,42 +28,75 @@ async function http(opcoes) {
   }
 }
 
+// ── leitura do dia, vinda do nó anterior ──────────────────────────────────
+const leituraRows = $(NOME_NO_LEITURA).all();
+if (!leituraRows.length) {
+  return [{ json: { encontrou: false, motivo: 'sem leitura de hoje para comparar' } }];
+}
+const leitura = leituraRows[0].json;
+const referencia = `${leitura.Livro} ${leitura.Capitulos}`;
+
+// ── todos os vídeos publicados hoje ───────────────────────────────────────
 const xml = await http({
   method: 'GET',
   url: `https://www.youtube.com/feeds/videos.xml?channel_id=${CHANNEL_ID}`,
 });
 
-// O feed é XML regular o bastante para não precisar de parser: pega o
-// primeiro bloco <entry>...</entry>, que é sempre o vídeo mais recente.
-const bloco = String(xml).match(/<entry>[\s\S]*?<\/entry>/);
-if (!bloco) {
-  return [{ json: { encontrou: false, motivo: 'feed sem vídeos ou formato mudou' } }];
-}
+const blocos = [...String(xml).matchAll(/<entry>[\s\S]*?<\/entry>/g)].map((m) => m[0]);
 
-const entry = bloco[0];
-const titulo = (entry.match(/<title>([\s\S]*?)<\/title>/) || [])[1] || '';
-const videoId = (entry.match(/<yt:videoId>([\s\S]*?)<\/yt:videoId>/) || [])[1] || '';
-const publicadoEm = (entry.match(/<published>([\s\S]*?)<\/published>/) || [])[1] || '';
-
-if (!videoId) {
-  return [{ json: { encontrou: false, motivo: 'não achei o id do vídeo no feed' } }];
-}
-
-// "Hoje" em Campo Grande, comparado com a data de publicação (que vem em UTC).
 const hojeLocal = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString().slice(0, 10);
-const publicadoLocal = publicadoEm
-  ? new Date(new Date(publicadoEm).getTime() - 4 * 60 * 60 * 1000).toISOString().slice(0, 10)
-  : null;
 
-const ehDeHoje = publicadoLocal === hojeLocal;
+const candidatos = blocos
+  .map((e) => {
+    const titulo = (e.match(/<title>([\s\S]*?)<\/title>/) || [])[1] || '';
+    const videoId = (e.match(/<yt:videoId>([\s\S]*?)<\/yt:videoId>/) || [])[1] || '';
+    const publicadoEm = (e.match(/<published>([\s\S]*?)<\/published>/) || [])[1] || '';
+    const publicadoLocal = publicadoEm
+      ? new Date(new Date(publicadoEm).getTime() - 4 * 3600000).toISOString().slice(0, 10)
+      : null;
+    return { titulo: titulo.trim(), link: `https://www.youtube.com/watch?v=${videoId}`, publicadoLocal };
+  })
+  .filter((c) => c.publicadoLocal === hojeLocal && c.link.includes('v='));
 
-return [{
-  json: {
-    encontrou: ehDeHoje,
-    titulo: titulo.trim(),
-    link: `https://www.youtube.com/watch?v=${videoId}`,
-    publicado_em: publicadoEm,
-    // Se o Cron rodou cedo e o vídeo de hoje ainda não saiu, isto fica
-    // false mesmo achando um vídeo — é o vídeo de ontem.
+if (!candidatos.length) {
+  return [{ json: { encontrou: false, motivo: 'nenhum vídeo publicado hoje' } }];
+}
+
+if (candidatos.length === 1) {
+  // só um candidato — nada para comparar, usa direto
+  return [{ json: { encontrou: true, titulo: candidatos[0].titulo, link: candidatos[0].link } }];
+}
+
+// ── mais de um vídeo hoje: pergunta ao modelo qual bate com a leitura ────
+const resp = await http({
+  method: 'POST',
+  url: 'https://api.anthropic.com/v1/messages',
+  headers: {
+    'x-api-key': $env.ANTHROPIC_API_KEY,
+    'anthropic-version': '2023-06-01',
+    'content-type': 'application/json',
   },
-}];
+  body: {
+    model: 'claude-haiku-4-5',
+    max_tokens: 20,
+    system: 'Você escolhe, numa lista numerada de vídeos, qual corresponde à '
+          + 'leitura bíblica do dia. Responda só o número. Se nenhum título '
+          + 'tiver relação com a leitura, responda "nenhum".',
+    messages: [{
+      role: 'user',
+      content: `Leitura de hoje: ${referencia}\n\nVídeos publicados hoje:\n`
+        + candidatos.map((c, i) => `${i + 1}. ${c.titulo}`).join('\n'),
+    }],
+  },
+  json: true,
+});
+
+const texto = (resp.content || []).map((b) => b.text || '').join('').trim().toLowerCase();
+const num = parseInt((texto.match(/\d+/) || [])[0], 10);
+const escolhido = candidatos[num - 1];
+
+if (!escolhido) {
+  return [{ json: { encontrou: false, motivo: `nenhum dos ${candidatos.length} vídeos de hoje bate com "${referencia}"` } }];
+}
+
+return [{ json: { encontrou: true, titulo: escolhido.titulo, link: escolhido.link } }];
