@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Saída do agente de qualificação",
+  "description": "O modelo devolve exatamente este objeto, uma vez por turno. Nada fora dele. Quem envia a mensagem e grava o estado é o n8n, não o modelo.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["resposta", "intencao", "campos", "handoff", "completo"],
+  "properties": {
+    "resposta": {
+      "type": "string",
+      "description": "Texto que vai para o WhatsApp. Curto, 2 a 5 linhas. Vazio só quando handoff é true e o humano assume sem despedida.",
+      "maxLength": 900
+    },
+
+    "intencao": {
+      "type": "string",
+      "description": "Para onde esta conversa vai. Definido no primeiro turno pelo número do menu e revisto se a conversa mostrar outra coisa — quem digita 7 mas descreve uma obra nova é qualificar, não suporte.",
+      "enum": ["qualificar", "vendedor", "suporte", "indefinido"]
+    },
+
+    "campos": {
+      "type": "object",
+      "description": "O que já foi coletado. Sempre devolvido inteiro, com null no que ainda falta — nunca omita uma chave. É este objeto que o n8n regrava no Redis.",
+      "additionalProperties": false,
+      "required": ["nome", "servico", "tipo_imovel", "regiao", "urgencia"],
+      "properties": {
+        "nome": {
+          "type": ["string", "null"],
+          "description": "Primeiro nome basta. Não insista se a pessoa não quiser dar."
+        },
+        "servico": {
+          "type": ["string", "null"],
+          "description": "O que a pessoa procura. Vem do número do menu ou do que ela descrever.",
+          "enum": [
+            "camera",
+            "ar_condicionado",
+            "cerca_eletrica",
+            "alarme",
+            "interfone_portao",
+            "outro",
+            null
+          ]
+        },
+        "tipo_imovel": {
+          "type": ["string", "null"],
+          "enum": ["residencia", "comercio", "industria", "condominio", null]
+        },
+        "regiao": {
+          "type": ["string", "null"],
+          "description": "Bairro ou cidade. Serve para saber se está na área de atendimento."
+        },
+        "urgencia": {
+          "type": ["string", "null"],
+          "description": "Quando pretende resolver. `pesquisando` é resposta legítima e não deve ser empurrada para cima.",
+          "enum": ["imediata", "esta_semana", "este_mes", "pesquisando", null]
+        }
+      }
+    },
+
+    "completo": {
+      "type": "boolean",
+      "description": "true quando os cinco campos estão preenchidos. Não significa lead quente — a régua de temperatura é do n8n, não do modelo."
+    },
+
+    "handoff": {
+      "type": "boolean",
+      "description": "true quando o bot para de conduzir e um humano assume. A partir daqui o bot não responde mais nesta conversa até alguém liberar."
+    },
+
+    "motivo_handoff": {
+      "type": ["string", "null"],
+      "description": "Obrigatório quando handoff é true. Frase curta para o vendedor ler antes de entrar: o que a pessoa quer e por que chegou até ele.",
+      "maxLength": 300
+    },
+
+    "observacao": {
+      "type": ["string", "null"],
+      "description": "Qualquer coisa que o vendedor precisaria saber e que não cabe nos campos: prédio tombado, obra em andamento, orçamento concorrente já feito. Não é resumo da conversa.",
+      "maxLength": 300
+    }
+  },
+
+  "allOf": [
+    {
+      "if": { "properties": { "handoff": { "const": true } }, "required": ["handoff"] },
+      "then": { "properties": { "motivo_handoff": { "type": "string", "minLength": 1 } } }
+    }
+  ]
+}
