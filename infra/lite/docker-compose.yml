@@ -110,12 +110,22 @@ services:
       CACHE_REDIS_URI: redis://redis:6379/6
       CACHE_REDIS_PREFIX_KEY: agente
       CACHE_LOCAL_ENABLED: "false"
-      WEBHOOK_GLOBAL_ENABLED: "true"
+      # Webhook global desligado de propósito: ele vale para TODAS as
+      # instâncias, então cada instância nova passa a despejar a conta de
+      # WhatsApp inteira dela no n8n. A inscrição é por instância, via
+      # POST /webhook/set/{instance} — ver infra/README.md.
+      #
+      # Os WEBHOOK_EVENTS_* abaixo são uma lista de EXCLUSÃO parcial: o que
+      # não está escrito aqui vem ligado por padrão. Foi assim que
+      # `group-participants.update` chegou no n8n sem nunca ter sido
+      # habilitado. O campo `events` do webhook por instância é o oposto —
+      # lista de permissão — e por isso é o lugar certo de decidir isso.
+      WEBHOOK_GLOBAL_ENABLED: "false"
       WEBHOOK_GLOBAL_URL: http://n8n:5678/webhook/whatsapp-pessoal
       WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS: "false"
       WEBHOOK_EVENTS_MESSAGES_UPSERT: "true"
       WEBHOOK_EVENTS_CONNECTION_UPDATE: "true"
-      WEBHOOK_EVENTS_QRCODE_UPDATED: "true"
+      WEBHOOK_EVENTS_QRCODE_UPDATED: "false"
       AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY}
       AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "true"
       LANGUAGE: pt-BR
