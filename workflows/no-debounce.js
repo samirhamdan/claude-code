@@ -44,11 +44,17 @@ const JANELA_MS = 8000; // o debounce em si é o nó Wait; isto é só documenta
 
 const entrada = $input.first().json;
 
+// Cada nó Redis devolve SÓ a propriedade que setou e descarta o resto do
+// item. Com vários deles em série, o que chega no `$input` é sempre só o
+// último valor lido — tudo o mais tem que ser buscado pelo nome do nó.
+// Ler de `$input` aqui não dá erro: dá `undefined`, que é pior.
+function daFiltra(campo) {
+  return $('Filtra Mensagem').first().json[campo];
+}
+
 // O jid vem do Filtra Mensagem e é a identidade da conversa em tudo:
 // chave de buffer, de debounce e de estado.
-const jid = String(
-  entrada.jid ?? $('Filtra Mensagem').first().json.jid ?? ''
-);
+const jid = String(entrada.jid ?? daFiltra('jid') ?? '');
 const telefone = jid.split('@')[0];
 
 if (!telefone) {
@@ -56,9 +62,9 @@ if (!telefone) {
 }
 
 if (MODO === 'marcar') {
-  const texto = String(
-    entrada.texto ?? entrada.mensagem ?? entrada.conversation ?? ''
-  ).trim();
+  // O `Lê Buffer` que vem logo antes deixou só `buffer_raw` no item, então o
+  // texto vem do Filtra Mensagem pelo nome, não do $input.
+  const texto = String(entrada.texto ?? daFiltra('texto') ?? '').trim();
 
   // O buffer acumula as mensagens da rajada para a vencedora ler todas.
   //
@@ -94,7 +100,12 @@ if (MODO === 'marcar') {
 }
 
 if (MODO === 'conferir') {
-  const tokenAtual = String(entrada.token_atual ?? '').trim();
+  // O `Relê Buffer` vem depois do `Relê Token` e descartou o token do item.
+  // Buscar pelo nome é obrigatório aqui — de `$input` viria undefined, e o
+  // nó concluiria que ninguém superou ninguém, respondendo em duplicata.
+  const tokenAtual = String(
+    entrada.token_atual ?? $('Relê Token').first().json.token_atual ?? ''
+  ).trim();
   const meuToken = String($execution.id);
 
   // Chegou mensagem depois da minha: ela responde por mim. Saio sem falar.
@@ -121,7 +132,7 @@ if (MODO === 'conferir') {
   }
 
   const texto = mensagens.join('\n').trim()
-    || String(entrada.texto ?? '').trim();
+    || String(entrada.texto ?? daFiltra('texto') ?? '').trim();
 
   return [{
     json: {
