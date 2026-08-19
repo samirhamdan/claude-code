@@ -14,6 +14,11 @@
  *   node scripts/n8n-sync-code.mjs           # grava
  *   node scripts/n8n-sync-code.mjs --check   # só acusa divergência, sai 1
  *
+ * Precisa de node, que **não existe na VPS** — lá ele só roda dentro do
+ * container do n8n. Rode este script na máquina de desenvolvimento; se
+ * precisar mesmo rodar na VPS, use `docker exec -i alessio_n8n node`.
+ * (O n8n-pull.sh, que é o que se roda na VPS, usa python3 por isso.)
+ *
  * Depois de gravar, suba para a VPS pela API REST do n8n. Nunca por import
  * manual — ver a seção Convenções do CLAUDE.md.
  */

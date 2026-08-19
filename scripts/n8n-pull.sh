@@ -24,6 +24,13 @@ set -euo pipefail
 : "${N8N_DOMAIN:?defina N8N_DOMAIN, ex: hub67.duckdns.org}"
 : "${N8N_API_KEY:?defina N8N_API_KEY (Settings -> API no n8n)}"
 
+# O filtro de JSON é python3, não node: a VPS não tem node instalado — ele
+# roda dentro do container do n8n, não no host. python3 vem no Ubuntu 24.04.
+command -v python3 >/dev/null || {
+  echo "python3 não encontrado — necessário para filtrar o JSON." >&2
+  exit 1
+}
+
 api() {
   curl -sS --fail-with-body -H "X-N8N-API-KEY: $N8N_API_KEY" \
     "https://$N8N_DOMAIN/api/v1/$1"
@@ -31,15 +38,11 @@ api() {
 
 # Sem argumentos: lista id e nome, que é como se descobre o id para baixar.
 if [ $# -eq 0 ]; then
-  api 'workflows?limit=100' | node -e '
-    let e = "";
-    process.stdin.on("data", (d) => (e += d));
-    process.stdin.on("end", () => {
-      for (const w of JSON.parse(e).data) {
-        console.log(`${w.id}\t${w.active ? "ativo   " : "inativo "}\t${w.name}`);
-      }
-    });
-  '
+  api 'workflows?limit=100' | python3 -c '
+import json, sys
+for w in json.load(sys.stdin)["data"]:
+    print(w["id"], "ativo  " if w.get("active") else "inativo", w["name"], sep="\t")
+'
   echo
   echo "Uso: scripts/n8n-pull.sh <id> <arquivo-destino>"
   exit 0
@@ -57,21 +60,19 @@ DESTINO="$2"
 # versionId, createdAt, updatedAt, active — muda a cada salvamento e sujaria
 # o diff sem dizer nada. `pinData` sai também: é dado de teste, e no v2 ele
 # carrega payload real de WhatsApp, com telefone e conteúdo de mensagem.
-api "workflows/$ID" | node -e '
-  let e = "";
-  process.stdin.on("data", (d) => (e += d));
-  process.stdin.on("end", () => {
-    const w = JSON.parse(e);
-    const limpo = {
-      name: w.name,
-      nodes: w.nodes,
-      connections: w.connections,
-      settings: w.settings ?? {},
-      pinData: {},
-    };
-    // Mesmo formato dos exports já versionados: 2 espaços, sem newline final.
-    process.stdout.write(JSON.stringify(limpo, null, 2));
-  });
+api "workflows/$ID" | python3 -c '
+import json, sys
+w = json.load(sys.stdin)
+limpo = {
+    "name": w["name"],
+    "nodes": w["nodes"],
+    "connections": w["connections"],
+    "settings": w.get("settings") or {},
+    "pinData": {},
+}
+# Mesmo formato dos exports já versionados: 2 espaços, sem newline no fim, e
+# os acentos literais em vez de \uXXXX — é o que o JSON.stringify do n8n faz.
+sys.stdout.write(json.dumps(limpo, indent=2, ensure_ascii=False))
 ' > "$DESTINO"
 
 echo "Gravado: $DESTINO"
