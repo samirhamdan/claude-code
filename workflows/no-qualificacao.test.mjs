@@ -19,12 +19,24 @@ const corpo = fs.readFileSync(FONTE, 'utf8');
 
 // O Code node envolve o corpo num async function e injeta $input, $env etc.
 const fabrica = new Function(
-  '$input', '$env', '$execution', 'respostaDoModelo',
+  '$input', '$env', '$execution', '$',
   `return (async function () {\n${corpo}\n}).call(this);`
 );
 
-function rodar({ telefone = '5567999990000', texto, estado_raw = '', modelo }) {
-  const $input = { first: () => ({ json: { telefone, texto, estado_raw } }) };
+function rodar({ telefone = '5567999990000', texto, estado_raw = '', modelo,
+                 // O `Lê Estado` e um no Redis: ele entrega SO estado_raw e
+                 // descarta telefone e texto. Por padrao o harness simula
+                 // isso, que e o que acontece no canvas de verdade.
+                 inputCompleto = false }) {
+  const $input = {
+    first: () => ({
+      json: inputCompleto ? { telefone, texto, estado_raw } : { estado_raw },
+    }),
+  };
+  const $ = (nome) => {
+    if (nome !== 'Confere Debounce') throw new Error(`no "${nome}" nao existe`);
+    return { first: () => ({ json: { telefone, texto } }) };
+  };
   const $env = { ANTHROPIC_API_KEY: 'sk-teste' };
   const $execution = { id: '123' };
 
@@ -41,7 +53,7 @@ function rodar({ telefone = '5567999990000', texto, estado_raw = '', modelo }) {
     },
   };
 
-  return fabrica.call(ctx, $input, $env, $execution)
+  return fabrica.call(ctx, $input, $env, $execution, $)
     .then((r) => ({ saida: r[0].json, chamouModelo }));
 }
 
@@ -185,6 +197,20 @@ casos.push(async () => {
   });
   ok('11. estado corrompido no Redis não derruba o atendimento',
     typeof saida.resposta === 'string' && saida.resposta.length > 0);
+});
+
+// A regressão que derrubou o primeiro teste em produção: o nó Lê Estado é
+// Redis, entrega só `estado_raw`, e ler telefone de `$input` estoura com
+// "Sem telefone na entrada". Todos os casos acima já rodam assim; este
+// existe para o defeito ter nome quando voltar.
+casos.push(async () => {
+  const { saida } = await rodar({
+    texto: 'oi',
+    // inputCompleto continua false: $input tem só estado_raw, como o Redis entrega
+  });
+  ok('12. telefone e texto vêm do Confere Debounce, não do $input',
+    saida.telefone === '5567999990000' && saida.resposta.length > 0,
+    `telefone=${saida.telefone}`);
 });
 
 for (const c of casos) await c();

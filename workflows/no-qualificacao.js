@@ -114,10 +114,32 @@ async function http(opcoes) {
 // ══════════════════════════════════════════════════════════════ entrada
 
 const entrada = $input.first().json;
-const telefone = String(entrada.telefone ?? '').trim();
-const texto = String(entrada.texto ?? '').trim();
 
-if (!telefone) throw new Error('Sem telefone na entrada.');
+// O `Lê Estado` logo antes é um nó Redis, e nó Redis devolve SÓ a
+// propriedade que setou: o que chega no `$input` é `{ estado_raw }`, sem
+// telefone e sem texto. Eles vêm do Confere Debounce, pelo nome do nó.
+//
+// Este erro já apareceu três vezes neste projeto — no Monta Entrada do
+// agente pessoal, no Confere Debounce, e aqui. Toda vez que um nó Redis
+// estiver entre a origem de um dado e quem o consome, busque pelo nome.
+function doDebounce(campo) {
+  try {
+    return $('Confere Debounce').first().json[campo];
+  } catch (e) {
+    return undefined; // permite rodar o nó isolado no editor
+  }
+}
+
+const telefone = String(entrada.telefone ?? doDebounce('telefone') ?? '').trim();
+const texto = String(entrada.texto ?? doDebounce('texto') ?? '').trim();
+
+if (!telefone) {
+  throw new Error(
+    'Sem telefone na entrada. Confira se o nó anterior se chama exatamente '
+    + '"Confere Debounce" — este nó busca telefone e texto por esse nome, '
+    + 'porque o Lê Estado descarta tudo menos o estado_raw.'
+  );
+}
 
 const ESTADO_VAZIO = {
   campos: {
