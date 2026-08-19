@@ -75,10 +75,25 @@ function qs(obj) {
     .join('&');
 }
 
+// `helpers.httpRequest` não tem timeout por padrão — espera para sempre — e o
+// n8n vem com EXECUTIONS_TIMEOUT desligado. Uma chamada pendurada prende a
+// execução inteira, e com ela um slot de concorrência, até alguém reiniciar o
+// n8n. É assim que uma resposta de segundos vira "demorou horas".
+const TIMEOUT_MS = 20000;         // Google, Trello: round trip curto
+const TIMEOUT_MODELO_MS = 120000; // Anthropic: pensa, e web_search roda lá
+
 async function http(opcoes) {
   try {
-    return await ctx.helpers.httpRequest(opcoes);
+    // Espalhado depois do padrão para o chamador poder subir o teto.
+    return await ctx.helpers.httpRequest({ timeout: TIMEOUT_MS, ...opcoes });
   } catch (e) {
+    const expirou = e.code === 'ECONNABORTED' || e.code === 'ETIMEDOUT'
+      || /timeout/i.test(String(e.message));
+    if (expirou) {
+      // Numa ferramenta isto vira tool_result com is_error, e o modelo
+      // consegue dizer que não falou com o serviço em vez de sumir.
+      throw new Error(`tempo esgotado em ${opcoes.url}`);
+    }
     const status = e.statusCode ?? e.httpCode ?? '?';
     let corpo = e.response?.body ?? e.error ?? e.message;
     if (typeof corpo === 'object') corpo = JSON.stringify(corpo);
@@ -776,6 +791,7 @@ async function chamarClaude(mensagens) {
       output_config: { effort: EFFORT },
     },
     json: true,
+    timeout: TIMEOUT_MODELO_MS,
   });
 }
 
