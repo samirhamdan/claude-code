@@ -22,7 +22,7 @@
       "type": "object",
       "description": "O que já foi coletado. Sempre devolvido inteiro, com null no que ainda falta — nunca omita uma chave. É este objeto que o n8n regrava no Redis.",
       "additionalProperties": false,
-      "required": ["nome", "servico", "tipo_imovel", "regiao", "urgencia"],
+      "required": ["nome", "servico", "tipo_imovel", "regiao", "urgencia", "porte"],
       "properties": {
         "nome": {
           "type": ["string", "null"],
@@ -43,7 +43,7 @@
         },
         "tipo_imovel": {
           "type": ["string", "null"],
-          "enum": ["residencia", "comercio", "industria", "condominio", null]
+          "enum": ["residencia", "comercio", "industria", "condominio", "rural", null]
         },
         "regiao": {
           "type": ["string", "null"],
@@ -53,13 +53,18 @@
           "type": ["string", "null"],
           "description": "Quando pretende resolver. `pesquisando` é resposta legítima e não deve ser empurrada para cima.",
           "enum": ["imediata", "esta_semana", "este_mes", "pesquisando", null]
+        },
+        "porte": {
+          "type": ["string", "null"],
+          "description": "Tamanho do projeto, pelo que a pessoa descreveu. Existe porque a viabilidade de atender fora da cidade depende de região E porte juntos: obra pequena longe não fecha a conta, sistema completo fecha. Sem isto o vendedor recebe a região e não consegue decidir nada. Não gera pergunta própria — deduza do que ela contar; se não der, deixe null.",
+          "enum": ["ponto_unico", "ambiente", "sistema_completo", null]
         }
       }
     },
 
     "completo": {
       "type": "boolean",
-      "description": "true quando os cinco campos estão preenchidos. Não significa lead quente — a régua de temperatura é do n8n, não do modelo."
+      "description": "true quando os CINCO campos de qualificação estão preenchidos: nome, servico, tipo_imovel, regiao, urgencia. `porte` não entra na conta — ele é contexto para o vendedor, e exigi-lo mudaria a definição de lead quente do CLAUDE.md. Completo não significa quente: a régua de temperatura é do n8n, não do modelo."
     },
 
     "handoff": {

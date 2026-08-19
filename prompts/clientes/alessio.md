@@ -3,9 +3,8 @@
 Config do cliente. O `system-qualificacao.md` é genérico e lê tudo daqui —
 nada da Alessio deve aparecer no prompt de qualificação.
 
-**Marcado com ⚠️ o que ainda precisa ser preenchido por quem conhece a
-operação.** O bot funciona sem, mas erra mais: sem faixa de atendimento ele
-qualifica lead de fora da área, e sem horário promete resposta de madrugada.
+**Marcado com ⚠️ o que ainda falta.** Só sobrou o Trello, que é a etapa 5 do
+roadmap — não bloqueia a qualificação.
 
 ---
 
@@ -22,9 +21,31 @@ qualifica lead de fora da área, e sem horário promete resposta de madrugada.
 
 | Campo | Valor |
 |---|---|
-| `horario` | ⚠️ seg–sex 8h–18h? sábado? |
-| `regiao_atendimento` | ⚠️ só Campo Grande, ou região? quais cidades? |
-| `fora_de_area` | ⚠️ o que dizer para quem está fora — recusa, ou passa para vendedor avaliar? |
+| `horario` | Qualquer horário — o bot atende 24/7 |
+| `regiao_atendimento` | **Não existe faixa fixa.** Viabilidade = região × porte |
+
+### A regra da região, que é diferente do óbvio
+
+Não há lista de cidades atendidas. Obra pequena longe não fecha a conta;
+sistema completo para residência, empresa ou fazenda fecha, mesmo longe.
+Quem decide é o vendedor, caso a caso.
+
+Consequência para o bot, e ela é rígida nas duas direções:
+
+- **Nunca diga que não atende** determinada região. A decisão não é dele e
+  ele perde um lead que fecharia.
+- **Nunca diga que atende** também. Isso é promessa de disponibilidade, que
+  está entre os limites duros.
+- Colete `regiao` e `porte` e siga. Neutro.
+
+É por causa dessa regra que existe o campo `porte`: sem ele o vendedor
+recebe a região sozinha e não consegue decidir nada.
+
+### Sobre atender 24/7
+
+O bot responde de madrugada, mas o humano não. Ele já é proibido de prometer
+prazo de retorno — e no handoff de madrugada isso importa mais, não menos.
+Avisa que alguém vai assumir, sem dizer quando.
 
 ## Serviços — e os números do menu
 
@@ -73,9 +94,28 @@ De onde o contato chega muda a primeira mensagem.
 
 | Origem | Como se detecta | Primeira mensagem |
 |---|---|---|
-| `anuncio` | ⚠️ depende do Click-to-WhatsApp: a Meta manda o texto pré-preenchido do anúncio na primeira mensagem. Confirmar o texto exato da campanha atual. | Pula o menu. Confirma o serviço do anúncio e já começa a qualificar. |
+| `anuncio` | Frase-chave pré-preenchida no Click-to-WhatsApp (tabela abaixo) | Pula o menu. Confirma o serviço do anúncio e já começa a qualificar. |
 | `cliente` | Telefone já existe na base | Não oferece menu de venda — pergunta se é sobre um serviço já instalado |
 | `desconhecida` | Qualquer outro caso | Menu completo acima |
+
+### Frases-chave das campanhas
+
+A Meta deixa definir o texto que já vem digitado quando a pessoa clica no
+anúncio. Uma frase por campanha, e o casamento é por **trecho distintivo**,
+sem acento e sem diferenciar maiúscula — a pessoa pode editar o texto antes
+de enviar, e o começo é o que ela mais mexe.
+
+| Campanha | Texto sugerido para o anúncio | Trecho que casa | `servico` |
+|---|---|---|---|
+| Motor de portão com Wi-Fi | `Olá! Vim pelo anúncio do motor de portão com Wi-Fi.` | `motor de portao` | `interfone_portao` |
+
+Ao criar campanha nova, acrescente uma linha aqui **antes** de subir o
+anúncio. Frase que não está na tabela cai em `desconhecida` e a pessoa recebe
+o menu — funciona, mas desperdiça o que ela já disse ao clicar.
+
+Escolha trechos que não colidam entre si: se um dia houver campanha de
+portão eletrônico *sem* wifi, `motor de portao` casa com as duas e a mais
+específica precisa vir antes na tabela.
 
 ## Handoff — quando o bot para e chama humano
 
@@ -88,8 +128,13 @@ Sempre:
 - Lead quente completo (ver régua abaixo)
 - Duas mensagens seguidas que o bot não entendeu
 
-⚠️ **Falta definir:** para quem vai o handoff em cada caso. Vendedor e
-suporte são a mesma pessoa? Mesmo número? Fora do horário, o que acontece?
+**Destino:** uma pessoa só — vendas e suporte são a mesma. Não há roteamento
+a fazer.
+
+Mesmo assim `intencao` continua importando, por dois motivos: muda o que o
+bot faz **antes** de passar (não se qualifica quem já é cliente com um
+equipamento quebrado), e muda o que vira card no Trello — chamado de suporte
+não é lead e não entra no funil de venda.
 
 ## Régua de temperatura
 
@@ -109,6 +154,7 @@ D+1 / D+3 / D+7.
 - **Nunca prometer preço, prazo ou disponibilidade.** Nem faixa, nem "a
   partir de". Quem fala de dinheiro é o vendedor.
 - Não afirmar que um serviço é ou não é feito sem estar na tabela acima.
+- **Não dizer se atende ou não atende uma região** — ver a regra acima.
 - Não marcar visita técnica — isso é do vendedor.
 
 ## Trello
