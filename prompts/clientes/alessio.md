@@ -47,46 +47,51 @@ O bot responde de madrugada, mas o humano não. Ele já é proibido de prometer
 prazo de retorno — e no handoff de madrugada isso importa mais, não menos.
 Avisa que alguém vai assumir, sem dizer quando.
 
-## Serviços — e os números do menu
+## Serviços
 
-O número que a pessoa digita mapeia direto para `campos.servico`:
+Catálogo — é o que o modelo precisa saber que a empresa faz. **Não é menu.**
 
-| Menu | Rótulo | `servico` |
-|---|---|---|
-| 1️⃣ | Câmeras de Segurança | `camera` |
-| 2️⃣ | Ar Condicionado | `ar_condicionado` |
-| 3️⃣ | Cerca Elétrica | `cerca_eletrica` |
-| 4️⃣ | Alarmes | `alarme` |
-| 5️⃣ | Interfones e Portões | `interfone_portao` |
-| 6️⃣ | Falar com vendedor | — (`intencao: vendedor`) |
-| 7️⃣ | Falar com suporte | — (`intencao: suporte`) |
+| Serviço | `servico` |
+|---|---|
+| Câmeras de segurança | `camera` |
+| Ar condicionado | `ar_condicionado` |
+| Cerca elétrica | `cerca_eletrica` |
+| Alarmes | `alarme` |
+| Interfones e portões | `interfone_portao` |
 
-**Motor de portão com wifi**, que é a campanha atual de tráfego pago, cai em
-`interfone_portao`. O anúncio não usa a palavra "interfone", então quem vem
-dele pode não reconhecer a opção 5 — por isso a origem `anuncio` pula o menu.
+**Motor de portão com wifi**, campanha atual de tráfego pago, cai em
+`interfone_portao`.
 
-## Mensagem de boas-vindas
+Vendedor e suporte não são itens de catálogo: são `intencao`, deduzidas do
+que a pessoa escreve — "quero falar com alguém", "o ar que vocês instalaram
+parou".
 
-Usada quando a origem é desconhecida (indicação, busca orgânica, contato
-direto):
+## Abertura da conversa
 
-```
-Olá! Seja bem vindo a Alessio Segurança e Climatização!
+**Não há menu numerado.** Existiu, e foi tirado: obrigava a pessoa a traduzir
+o problema dela para uma de sete caixas, e lia como formulário. Quem chega
+por anúncio de motor de portão não se reconhece em "Interfones e Portões".
 
-Meu nome é Samir e estou aqui para ajudar com nossas soluções.
+Também não há saudação fixa. O primeiro turno é do modelo, porque texto
+enlatado fica artificial justamente quando ignora o que a pessoa falou:
+"boa tarde" pede cumprimento, "quero câmera pra loja, é urgente" pede
+resposta ao que foi dito.
 
-Escolha uma opção:
+A abertura tem três elementos, em 3 ou 4 linhas:
 
-1️⃣ Câmeras de Segurança
-2️⃣ Ar Condicionado
-3️⃣ Cerca Elétrica
-4️⃣ Alarmes
-5️⃣ Interfones e Portões
-6️⃣ Falar com vendedor
-7️⃣ Falar com suporte
+1. Cumprimento e identificação — nome e empresa.
+2. Uma frase de competência **pelo concreto**: o que a empresa instala.
+   Nada de "somos referência" ou "excelência" — panfleto tira autoridade em
+   vez de dar.
+3. Uma pergunta só, aberta.
 
-Responda com o número desejado!
-```
+Se a pessoa já disse o que quer, o cumprimento encolhe para meia linha e a
+conversa vai direto para o que falta.
+
+⚠️ **A saudação do WhatsApp Business precisa ser desligada** (Ferramentas
+para empresas → Mensagem de saudação). Com ela ligada o lead recebe duas
+aberturas, e ela ainda redispara sozinha após 14 dias parados — o que cairia
+no meio de uma qualificação em andamento.
 
 ## Origens
 
@@ -94,9 +99,9 @@ De onde o contato chega muda a primeira mensagem.
 
 | Origem | Como se detecta | Primeira mensagem |
 |---|---|---|
-| `anuncio` | Frase-chave pré-preenchida no Click-to-WhatsApp (tabela abaixo) | Pula o menu. Confirma o serviço do anúncio e já começa a qualificar. |
-| `cliente` | Telefone já existe na base | Não oferece menu de venda — pergunta se é sobre um serviço já instalado |
-| `desconhecida` | Qualquer outro caso | Menu completo acima |
+| `anuncio` | Frase-chave pré-preenchida no Click-to-WhatsApp (tabela abaixo) | Já vem com o serviço preenchido: reconhece o que ela quer e pergunta a próxima coisa que falta. |
+| `cliente` | Telefone já existe na base | Não trata como lead — pergunta se é sobre um serviço já instalado |
+| `desconhecida` | Qualquer outro caso | Abertura em três elementos, como acima |
 
 ### Frases-chave das campanhas
 
@@ -111,7 +116,7 @@ de enviar, e o começo é o que ela mais mexe.
 
 Ao criar campanha nova, acrescente uma linha aqui **antes** de subir o
 anúncio. Frase que não está na tabela cai em `desconhecida` e a pessoa recebe
-o menu — funciona, mas desperdiça o que ela já disse ao clicar.
+a abertura genérica — funciona, mas desperdiça o que ela já disse ao clicar.
 
 Escolha trechos que não colidam entre si: se um dia houver campanha de
 portão eletrônico *sem* wifi, `motor de portao` casa com as duas e a mais
@@ -121,8 +126,8 @@ específica precisa vir antes na tabela.
 
 Sempre:
 
-- Pediu explicitamente falar com pessoa (opção 6, ou "quero falar com alguém")
-- Opção 7 (suporte): é cliente com problema, não lead
+- Pediu para falar com pessoa, de qualquer jeito que tenha pedido
+- É suporte: cliente com problema, não lead
 - Insistiu em preço, prazo ou disponibilidade depois de uma recusa
 - Reclamação, cobrança ou tom de irritação
 - Lead quente completo (ver régua abaixo)

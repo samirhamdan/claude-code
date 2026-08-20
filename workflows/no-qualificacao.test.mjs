@@ -75,9 +75,9 @@ function ok(nome, cond, detalhe = '') {
 const casos = [];
 
 casos.push(async () => {
-  const { saida, chamouModelo } = await rodar({ texto: 'oi' });
-  ok('1. "oi" recebe o menu sem gastar chamada de modelo',
-    saida.resposta.includes('1️⃣') && !chamouModelo,
+  const { saida, chamouModelo } = await rodar({ texto: 'oi', modelo: RESP_PADRAO });
+  ok('1. primeiro turno vai ao modelo, sem saudacao enlatada',
+    chamouModelo && saida.enviar === true && !saida.resposta.includes('1\u20e3'),
     `chamouModelo=${chamouModelo}`);
 });
 
@@ -104,19 +104,25 @@ casos.push(async () => {
 
 casos.push(async () => {
   const estado = JSON.stringify({ origem: 'desconhecida', saudou: true, campos: {} });
-  const { saida } = await rodar({ texto: '5', estado_raw: estado, modelo: RESP_PADRAO });
-  ok('4. opção 5 do menu vira interfone_portao',
+  const { saida } = await rodar({
+    texto: 'queria pôr um motor no portão de casa', estado_raw: estado,
+    modelo: { ...RESP_PADRAO,
+      campos: { ...RESP_PADRAO.campos, servico: 'interfone_portao' } },
+  });
+  ok('4. serviço vem da linguagem natural, sem menu numerado',
     saida.campos.servico === 'interfone_portao', `servico=${saida.campos.servico}`);
 });
 
 casos.push(async () => {
   const estado = JSON.stringify({ origem: 'desconhecida', saudou: true, campos: {} });
   const { saida } = await rodar({
-    texto: '7', estado_raw: estado,
+    texto: 'o ar que vocês instalaram parou de gelar', estado_raw: estado,
     modelo: { ...RESP_PADRAO, intencao: 'suporte' },
   });
-  ok('5. opção 7 vira intenção de suporte, não de venda',
-    saida.intencao === 'suporte', `intencao=${saida.intencao}`);
+  ok('5. intenção de suporte sobrevive até a saída e o estado',
+    saida.intencao === 'suporte'
+    && JSON.parse(saida.estado).intencao === 'suporte',
+    `intencao=${saida.intencao}`);
 });
 
 casos.push(async () => {
@@ -205,7 +211,7 @@ casos.push(async () => {
 // existe para o defeito ter nome quando voltar.
 casos.push(async () => {
   const { saida } = await rodar({
-    texto: 'oi',
+    texto: 'oi', modelo: RESP_PADRAO,
     // inputCompleto continua false: $input tem só estado_raw, como o Redis entrega
   });
   ok('12. telefone e texto vêm do Confere Debounce, não do $input',

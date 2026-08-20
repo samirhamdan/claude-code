@@ -43,15 +43,16 @@ const CLIENTE = {
   atendente: 'Samir',
   cidade: 'Campo Grande / MS',
 
-  servicos: {
-    1: { rotulo: 'Câmeras de Segurança', valor: 'camera' },
-    2: { rotulo: 'Ar Condicionado', valor: 'ar_condicionado' },
-    3: { rotulo: 'Cerca Elétrica', valor: 'cerca_eletrica' },
-    4: { rotulo: 'Alarmes', valor: 'alarme' },
-    5: { rotulo: 'Interfones e Portões', valor: 'interfone_portao' },
-    6: { rotulo: 'Falar com vendedor', valor: null, intencao: 'vendedor' },
-    7: { rotulo: 'Falar com suporte', valor: null, intencao: 'suporte' },
-  },
+  // Sem menu numerado: ele lia como formulário e obrigava a pessoa a
+  // traduzir o problema dela para uma das sete caixas. Esta lista agora é
+  // catálogo para o modelo saber o que a empresa faz, não script.
+  servicos: [
+    { rotulo: 'câmeras de segurança', valor: 'camera' },
+    { rotulo: 'ar condicionado', valor: 'ar_condicionado' },
+    { rotulo: 'cerca elétrica', valor: 'cerca_eletrica' },
+    { rotulo: 'alarmes', valor: 'alarme' },
+    { rotulo: 'interfones e portões', valor: 'interfone_portao' },
+  ],
 
   // Frase pré-preenchida pelo Click-to-WhatsApp. O casamento é por trecho
   // distintivo, sem acento e sem caixa: a pessoa edita o texto antes de
@@ -60,22 +61,6 @@ const CLIENTE = {
   campanhas: [
     { trecho: 'motor de portao', servico: 'interfone_portao' },
   ],
-
-  boasVindas: `Olá! Seja bem vindo a ${'Alessio Segurança e Climatização'}!
-
-Meu nome é Samir e estou aqui para ajudar com nossas soluções.
-
-Escolha uma opção:
-
-1️⃣ Câmeras de Segurança
-2️⃣ Ar Condicionado
-3️⃣ Cerca Elétrica
-4️⃣ Alarmes
-5️⃣ Interfones e Portões
-6️⃣ Falar com vendedor
-7️⃣ Falar com suporte
-
-Responda com o número desejado!`,
 
   gatilhosHandoff: [
     'A pessoa pediu para falar com alguém, de qualquer jeito que tenha pedido.',
@@ -213,50 +198,42 @@ if (!estado.origem) {
   }
 }
 
-// Resposta ao menu: um número sozinho, na conversa que acabou de ser saudada.
-const soNumero = /^[1-7]$/.test(textoNorm) ? Number(textoNorm) : null;
-if (soNumero) {
-  const opcao = CLIENTE.servicos[soNumero];
-  if (opcao.intencao) {
-    estado.intencao = opcao.intencao;
-  } else {
-    estado.intencao = 'qualificar';
-    estado.campos.servico = estado.campos.servico ?? opcao.valor;
-  }
-}
-
-// ── boas-vindas: determinístico, não vale gastar chamada de modelo ───────
-// Primeira mensagem de origem desconhecida recebe o menu e pronto. Deixar o
-// modelo redigir isso todo dia é pagar para ele reescrever um texto que já
-// está aprovado — e correr o risco de ele reescrever diferente.
-if (!estado.saudou && estado.origem === 'desconhecida' && !soNumero) {
-  estado.saudou = true;
-  estado.historico = [
-    { role: 'user', content: texto },
-    { role: 'assistant', content: CLIENTE.boasVindas },
-  ];
-  return [{
-    json: {
-      enviar: true,
-      resposta: CLIENTE.boasVindas,
-      telefone,
-      campos: estado.campos,
-      intencao: estado.intencao,
-      handoff: false,
-      completo: false,
-      temperatura: 'frio',
-      estado: JSON.stringify(estado),
-    },
-  }];
-}
+// Primeiro turno é do modelo também. Saudação fixa fica artificial porque
+// ignora o que a pessoa falou: "boa tarde" pede cumprimento, "quero câmera
+// pra loja, é urgente" pede resposta ao que foi dito. Quem sabe diferenciar
+// isso é o modelo, e é uma chamada barata.
+const primeiroTurno = !estado.saudou;
 estado.saudou = true;
 
 // ═════════════════════════════════════════════════════════ system prompt
 
-const catalogo = Object.entries(CLIENTE.servicos)
-  .filter(([, s]) => s.valor)
-  .map(([n, s]) => `${n}. ${s.rotulo} (${s.valor})`)
+const catalogo = CLIENTE.servicos
+  .map((s) => `- ${s.rotulo} (${s.valor})`)
   .join('\n');
+
+// O primeiro turno é o que define se a conversa parece atendimento ou
+// formulário. Vale instruções próprias — mas só no turno em que se aplica,
+// senão o modelo fica se reapresentando no meio da conversa.
+const instrucaoAbertura = primeiroTurno ? `
+
+## Esta é a primeira mensagem desta pessoa
+
+Abra a conversa. Três coisas, em 3 ou 4 linhas no total:
+
+1. Cumprimente e diga quem você é — seu nome e a empresa.
+2. Uma frase que mostre competência **pelo concreto**, não pelo adjetivo:
+   o que a empresa instala. Nada de "somos referência", "excelência",
+   "melhor do mercado" — isso soa a panfleto e tira autoridade em vez de dar.
+3. Uma pergunta só, aberta, sobre o que a pessoa precisa.
+
+**Se ela já disse o que quer na primeira mensagem, não devolva um cumprimento
+genérico por cima.** Reconheça o que ela falou, apresente-se em meia linha e
+já pergunte a próxima coisa que falta. Ignorar o que a pessoa acabou de
+escrever é o que faz atendimento automático parecer automático.
+
+Nunca ofereça lista numerada de opções. Se ela não disse o que precisa,
+pergunte com uma frase — e pode citar os serviços no meio da frase,
+naturalmente, sem virar menu.` : '';
 
 const systemPrompt = `Você é ${CLIENTE.atendente}, do primeiro atendimento da ${CLIENTE.empresa}, em ${CLIENTE.cidade}, pelo WhatsApp.
 
@@ -316,8 +293,13 @@ quando.
 
 Cliente com problema NÃO é lead. Quem escreve sobre equipamento que já tem vai
 para suporte, e aí você não pergunta região nem urgência — soa como se você
-não tivesse lido o que ele disse. O contrário também vale: quem digitou 7 mas
-descreve instalação nova é qualificar.
+não tivesse lido o que ele disse. O contrário também vale: quem começa
+falando de defeito mas descreve uma instalação nova é qualificar.
+
+Não há menu nem número para a pessoa digitar. Ela vai pedir com as palavras
+dela — "quero pôr câmera", "meu portão não abre", "quanto custa um ar" — e é
+disso que você tira o serviço e a intenção.
+${instrucaoAbertura}
 
 ## O que você já sabe desta conversa
 Origem do contato: ${estado.origem}
