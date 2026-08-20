@@ -33,28 +33,41 @@ if (jid.endsWith('@g.us')) return [];
 // Status/broadcast do WhatsApp não é conversa.
 if (jid.startsWith('status@')) return [];
 
+const telefone = jid.split('@')[0].split(':')[0];
+if (!telefone) return [];
+
 const msg = dados.message ?? {};
 
-// O texto vem em lugares diferentes conforme o tipo. Só estes dois são
-// mensagem digitada; o resto (imagem, áudio, localização, contato) ainda não
-// é tratado neste fluxo.
+const comum = {
+  jid,
+  telefone,
+  nome_whatsapp: dados.pushName ?? null,
+  instancia: corpo.instance ?? null,
+};
+
+// ── áudio ────────────────────────────────────────────────────────────────
+// Lead de WhatsApp manda voz o tempo todo, e no tráfego pago mais ainda.
+// O id da mensagem é o que a Evolution precisa para devolver o arquivo.
+const audio = msg.audioMessage ?? null;
+if (audio) {
+  const id = chave.id ?? dados.key?.id ?? null;
+  if (!id) return [];
+  return [{ json: { ...comum, tipo: 'audio', audio_id: id, texto: '' } }];
+}
+
+// ── texto ────────────────────────────────────────────────────────────────
 const texto = String(
   msg.conversation
   ?? msg.extendedTextMessage?.text
   ?? ''
 ).trim();
 
-if (!texto) return [];
+if (texto) {
+  return [{ json: { ...comum, tipo: 'texto', texto } }];
+}
 
-const telefone = jid.split('@')[0].split(':')[0];
-if (!telefone) return [];
-
-return [{
-  json: {
-    jid,
-    telefone,
-    texto,
-    nome_whatsapp: dados.pushName ?? null,
-    instancia: corpo.instance ?? null,
-  },
-}];
+// ── o resto ──────────────────────────────────────────────────────────────
+// Imagem, vídeo, documento, localização, contato, figurinha. Some em
+// silêncio, que é ruim, mas menos ruim que responder besteira. Quando
+// alguém mandar foto do portão pedindo orçamento, é aqui que se trata.
+return [];

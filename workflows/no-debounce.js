@@ -52,6 +52,26 @@ function daFiltra(campo) {
   return $('Filtra Mensagem').first().json[campo];
 }
 
+// Referenciar com `$()` um nó que não rodou derruba o nó inteiro. Como
+// texto e áudio são ramos alternativos, o `Monta Texto` fica sem executar
+// em toda mensagem digitada — tem que ser lido atrás de uma guarda.
+function noOpcional(nome) {
+  try {
+    return $(nome).isExecuted ? $(nome).first().json : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// O texto da conversa vem do ramo que rodou: transcrição, se veio áudio;
+// o que a pessoa digitou, caso contrário. Assumir um dos dois é o erro que
+// derrubou o Monta Entrada do agente pessoal.
+function textoDaConversa() {
+  const audio = noOpcional('Monta Texto');
+  if (audio && audio.texto) return audio.texto;
+  return daFiltra('texto');
+}
+
 // O jid vem do Filtra Mensagem e é a identidade da conversa em tudo:
 // chave de buffer, de debounce e de estado.
 const jid = String(entrada.jid ?? daFiltra('jid') ?? '');
@@ -63,8 +83,8 @@ if (!telefone) {
 
 if (MODO === 'marcar') {
   // O `Lê Buffer` que vem logo antes deixou só `buffer_raw` no item, então o
-  // texto vem do Filtra Mensagem pelo nome, não do $input.
-  const texto = String(entrada.texto ?? daFiltra('texto') ?? '').trim();
+  // texto vem pelo nome do nó — e de qual nó depende do ramo que rodou.
+  const texto = String(entrada.texto ?? textoDaConversa() ?? '').trim();
 
   // O buffer acumula as mensagens da rajada para a vencedora ler todas.
   //
@@ -132,7 +152,7 @@ if (MODO === 'conferir') {
   }
 
   const texto = mensagens.join('\n').trim()
-    || String(entrada.texto ?? daFiltra('texto') ?? '').trim();
+    || String(entrada.texto ?? textoDaConversa() ?? '').trim();
 
   return [{
     json: {

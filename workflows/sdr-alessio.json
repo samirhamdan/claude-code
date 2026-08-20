@@ -20,7 +20,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "/**\n * Nó \"Filtra Mensagem\" — primeira porta do fluxo.\n *\n * Descarta o que não é conversa de lead e normaliza o que sobra num item\n * único: jid, telefone, texto. Tudo depois deste nó pode confiar nesses três.\n *\n * Devolver `[]` mata o ramo — é assim que o n8n para um fluxo sem precisar de\n * nó IF. Execução descartada aparece como sucesso em milissegundos, o que é\n * o esperado e não é erro.\n *\n * Nó Code, modo \"Run Once for All Items\".\n */\n\nconst corpo = $input.first().json.body ?? $input.first().json;\nconst dados = corpo.data ?? {};\nconst chave = dados.key ?? {};\n\n// A inscrição do webhook já é allow-list de MESSAGES_UPSERT, mas a Evolution\n// muda o default entre versões e o global pode ser religado por engano. Uma\n// linha aqui é mais barata que descobrir de novo por que a fila encheu.\nif (corpo.event && corpo.event !== 'messages.upsert') return [];\n\nconst jid = String(chave.remoteJid ?? '');\n\n// Mensagem que o próprio bot enviou volta como evento. Sem isto ele responde\n// a si mesmo, em laço.\nif (chave.fromMe === true) return [];\n\n// Grupo. O groupsIgnore da instância já barra, mas vale a trava dupla —\n// SDR respondendo grupo é vexame na frente dos clientes do cliente.\nif (jid.endsWith('@g.us')) return [];\n\n// Status/broadcast do WhatsApp não é conversa.\nif (jid.startsWith('status@')) return [];\n\nconst msg = dados.message ?? {};\n\n// O texto vem em lugares diferentes conforme o tipo. Só estes dois são\n// mensagem digitada; o resto (imagem, áudio, localização, contato) ainda não\n// é tratado neste fluxo.\nconst texto = String(\n  msg.conversation\n  ?? msg.extendedTextMessage?.text\n  ?? ''\n).trim();\n\nif (!texto) return [];\n\nconst telefone = jid.split('@')[0].split(':')[0];\nif (!telefone) return [];\n\nreturn [{\n  json: {\n    jid,\n    telefone,\n    texto,\n    nome_whatsapp: dados.pushName ?? null,\n    instancia: corpo.instance ?? null,\n  },\n}];\n"
+        "jsCode": "/**\n * Nó \"Filtra Mensagem\" — primeira porta do fluxo.\n *\n * Descarta o que não é conversa de lead e normaliza o que sobra num item\n * único: jid, telefone, texto. Tudo depois deste nó pode confiar nesses três.\n *\n * Devolver `[]` mata o ramo — é assim que o n8n para um fluxo sem precisar de\n * nó IF. Execução descartada aparece como sucesso em milissegundos, o que é\n * o esperado e não é erro.\n *\n * Nó Code, modo \"Run Once for All Items\".\n */\n\nconst corpo = $input.first().json.body ?? $input.first().json;\nconst dados = corpo.data ?? {};\nconst chave = dados.key ?? {};\n\n// A inscrição do webhook já é allow-list de MESSAGES_UPSERT, mas a Evolution\n// muda o default entre versões e o global pode ser religado por engano. Uma\n// linha aqui é mais barata que descobrir de novo por que a fila encheu.\nif (corpo.event && corpo.event !== 'messages.upsert') return [];\n\nconst jid = String(chave.remoteJid ?? '');\n\n// Mensagem que o próprio bot enviou volta como evento. Sem isto ele responde\n// a si mesmo, em laço.\nif (chave.fromMe === true) return [];\n\n// Grupo. O groupsIgnore da instância já barra, mas vale a trava dupla —\n// SDR respondendo grupo é vexame na frente dos clientes do cliente.\nif (jid.endsWith('@g.us')) return [];\n\n// Status/broadcast do WhatsApp não é conversa.\nif (jid.startsWith('status@')) return [];\n\nconst telefone = jid.split('@')[0].split(':')[0];\nif (!telefone) return [];\n\nconst msg = dados.message ?? {};\n\nconst comum = {\n  jid,\n  telefone,\n  nome_whatsapp: dados.pushName ?? null,\n  instancia: corpo.instance ?? null,\n};\n\n// ── áudio ────────────────────────────────────────────────────────────────\n// Lead de WhatsApp manda voz o tempo todo, e no tráfego pago mais ainda.\n// O id da mensagem é o que a Evolution precisa para devolver o arquivo.\nconst audio = msg.audioMessage ?? null;\nif (audio) {\n  const id = chave.id ?? dados.key?.id ?? null;\n  if (!id) return [];\n  return [{ json: { ...comum, tipo: 'audio', audio_id: id, texto: '' } }];\n}\n\n// ── texto ────────────────────────────────────────────────────────────────\nconst texto = String(\n  msg.conversation\n  ?? msg.extendedTextMessage?.text\n  ?? ''\n).trim();\n\nif (texto) {\n  return [{ json: { ...comum, tipo: 'texto', texto } }];\n}\n\n// ── o resto ──────────────────────────────────────────────────────────────\n// Imagem, vídeo, documento, localização, contato, figurinha. Some em\n// silêncio, que é ruim, mas menos ruim que responder besteira. Quando\n// alguém mandar foto do portão pedindo orçamento, é aqui que se trata.\nreturn [];\n"
       },
       "id": "n-01",
       "name": "Filtra Mensagem",
@@ -33,16 +33,13 @@
     },
     {
       "parameters": {
-        "operation": "get",
-        "propertyName": "buffer_raw",
-        "key": "=buffer:{{ $('Filtra Mensagem').first().json.telefone }}",
-        "keyType": "automatic",
-        "options": {}
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Deixa passar só mensagem digitada. O ramo de áudio morre aqui.\nreturn $input.first().json.tipo === 'texto' ? $input.all() : [];\n"
       },
       "id": "n-02",
-      "name": "Lê Buffer",
-      "type": "n8n-nodes-base.redis",
-      "typeVersion": 1,
+      "name": "Só Texto",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [
         440,
         0
@@ -51,14 +48,137 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "/**\n * Nó \"Confere Debounce\" — decide se esta execução é a que responde.\n *\n * O problema: o lead manda \"oi\", \"tudo bem?\", \"queria um orçamento\" em três\n * mensagens seguidas. Sem debounce o bot responde três vezes e a conversa\n * desanda. É obrigatório — está no CLAUDE.md.\n *\n * A ideia: toda mensagem que chega grava a própria id de execução numa chave\n * do Redis. Depois de esperar 8s, cada execução relê a chave. Só continua\n * quem ainda estiver lá — ou seja, a última a chegar. As outras morrem em\n * silêncio, e a última responde por todas.\n *\n * Nó Code, modo \"Run Once for All Items\".\n *\n * Posição no canvas:\n *\n *   Filtra Mensagem\n *        ↓\n *   Lê Buffer (Redis GET  buffer:{jid})\n *        ↓\n *   Marca Vez (Code, este arquivo, modo=\"marcar\")\n *        ↓\n *   Grava Buffer (Redis SET buffer:{jid}, TTL 120)\n *   Marca Token  (Redis SET debounce:{jid} = id da execução, TTL 120)\n *        ↓\n *   Espera 8s (Wait)\n *        ↓\n *   Relê Token (Redis GET debounce:{jid})\n *        ↓\n *   Confere Debounce (Code, este arquivo, modo=\"conferir\")\n *        ↓\n *   IF continuar == true → segue para a qualificação\n *\n * Os dois modos vivem no mesmo arquivo porque são as duas metades da mesma\n * regra; separá-los em dois arquivos faz um ser alterado sem o outro.\n * Escolha o modo pela constante abaixo ao colar em cada nó.\n */\n\n// ─── ao colar, ajuste só isto ────────────────────────────────────────────\nconst MODO = 'marcar'; // 'marcar' antes do Wait, 'conferir' depois\n// ─────────────────────────────────────────────────────────────────────────\n\nconst JANELA_MS = 8000; // o debounce em si é o nó Wait; isto é só documentação\n\nconst entrada = $input.first().json;\n\n// Cada nó Redis devolve SÓ a propriedade que setou e descarta o resto do\n// item. Com vários deles em série, o que chega no `$input` é sempre só o\n// último valor lido — tudo o mais tem que ser buscado pelo nome do nó.\n// Ler de `$input` aqui não dá erro: dá `undefined`, que é pior.\nfunction daFiltra(campo) {\n  return $('Filtra Mensagem').first().json[campo];\n}\n\n// O jid vem do Filtra Mensagem e é a identidade da conversa em tudo:\n// chave de buffer, de debounce e de estado.\nconst jid = String(entrada.jid ?? daFiltra('jid') ?? '');\nconst telefone = jid.split('@')[0];\n\nif (!telefone) {\n  throw new Error('Sem jid — o Filtra Mensagem não passou a identidade da conversa.');\n}\n\nif (MODO === 'marcar') {\n  // O `Lê Buffer` que vem logo antes deixou só `buffer_raw` no item, então o\n  // texto vem do Filtra Mensagem pelo nome, não do $input.\n  const texto = String(entrada.texto ?? daFiltra('texto') ?? '').trim();\n\n  // O buffer acumula as mensagens da rajada para a vencedora ler todas.\n  //\n  // Isto é um read-modify-write: duas mensagens que chegam no mesmo instante\n  // podem ler o mesmo buffer e uma sobrescrever a outra. A janela é de uns\n  // 100ms e o pior caso é perder uma mensagem da rajada, com as outras e o\n  // histórico ainda no lugar.\n  //\n  // Se o nó Redis desta instalação oferecer a operação `push`, prefira: lista\n  // é append atômico e a corrida deixa de existir. Aí este nó só monta o\n  // texto e o push vira o \"Grava Buffer\".\n  let anteriores = [];\n  try {\n    const bruto = entrada.buffer_raw;\n    const v = bruto ? JSON.parse(bruto) : [];\n    if (Array.isArray(v)) anteriores = v;\n  } catch (e) {\n    anteriores = [];\n  }\n\n  const buffer = texto ? [...anteriores, texto] : anteriores;\n\n  return [{\n    json: {\n      jid,\n      telefone,\n      // Quem chegar depois sobrescreve, e é isso que faz a última vencer.\n      token: String($execution.id),\n      buffer: JSON.stringify(buffer),\n      janela_ms: JANELA_MS,\n    },\n  }];\n}\n\nif (MODO === 'conferir') {\n  // O `Relê Buffer` vem depois do `Relê Token` e descartou o token do item.\n  // Buscar pelo nome é obrigatório aqui — de `$input` viria undefined, e o\n  // nó concluiria que ninguém superou ninguém, respondendo em duplicata.\n  const tokenAtual = String(\n    entrada.token_atual ?? $('Relê Token').first().json.token_atual ?? ''\n  ).trim();\n  const meuToken = String($execution.id);\n\n  // Chegou mensagem depois da minha: ela responde por mim. Saio sem falar.\n  if (tokenAtual && tokenAtual !== meuToken) {\n    return [{\n      json: {\n        continuar: false,\n        jid,\n        telefone,\n        motivo: `execução ${meuToken} superada por ${tokenAtual}`,\n      },\n    }];\n  }\n\n  // Token vazio significa que a chave expirou (TTL curto demais para a\n  // janela) ou que alguém limpou o Redis. Seguir é melhor que ficar mudo:\n  // pior caso o bot responde duas vezes; o outro caso é não responder nunca.\n  let mensagens = [];\n  try {\n    const v = entrada.buffer_raw ? JSON.parse(entrada.buffer_raw) : [];\n    if (Array.isArray(v)) mensagens = v;\n  } catch (e) {\n    mensagens = [];\n  }\n\n  const texto = mensagens.join('\\n').trim()\n    || String(entrada.texto ?? daFiltra('texto') ?? '').trim();\n\n  return [{\n    json: {\n      continuar: true,\n      jid,\n      telefone,\n      // As três mensagens da rajada viram um texto só para o modelo.\n      texto,\n      mensagens_na_rajada: mensagens.length,\n      token: meuToken,\n    },\n  }];\n}\n\nthrow new Error(`MODO inválido: \"${MODO}\". Use 'marcar' ou 'conferir'.`);\n"
+        "jsCode": "// Espelho do Só Texto. Um dos dois sempre devolve [].\nreturn $input.first().json.tipo === 'audio' ? $input.all() : [];\n"
       },
       "id": "n-03",
+      "name": "Só Áudio",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://evo-hub67.duckdns.org/chat/getBase64FromMediaMessage/alessio-comercial",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ message: { key: { id: $json.audio_id } } }) }}",
+        "options": {}
+      },
+      "id": "n-04",
+      "name": "Baixa Áudio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "/**\n * Ramo de áudio — os dois nós Code que cercam a transcrição.\n *\n * Fluxo:\n *\n *   Filtra Mensagem\n *     ├─ Só Texto ────────────────────────────────────────────┐\n *     └─ Só Áudio                                             │\n *          ↓                                                  │\n *        Baixa Áudio (HTTP → Evolution getBase64FromMediaMessage)\n *          ↓                                                  │\n *        Converte Base64 (Code, este arquivo, modo=\"binario\") │\n *          ↓                                                  │\n *        Transcreve (HTTP → Groq, multipart)                  │\n *          ↓                                                  │\n *        Monta Texto (Code, este arquivo, modo=\"texto\") ──────┤\n *                                                             ▼\n *                                                        Lê Buffer\n *\n * Os dois ramos entram no mesmo `Lê Buffer`. Só um deles roda por mensagem —\n * o outro morreu com `[]` lá no roteador — e é por isso que quem vem depois\n * precisa perguntar qual rodou em vez de assumir.\n *\n * Nó Code, modo \"Run Once for All Items\".\n * Requer no container: GROQ_API_KEY (o nó Transcreve usa).\n */\n\n// ─── ao colar, ajuste só isto ────────────────────────────────────────────\nconst MODO = 'binario'; // 'binario' depois do Baixa Áudio, 'texto' depois do Transcreve\n// ─────────────────────────────────────────────────────────────────────────\n\nconst ctx = this;\nconst entrada = $input.first().json;\n\nif (MODO === 'binario') {\n  // A Evolution devolve o arquivo em base64 dentro do JSON. O nó Transcreve\n  // manda multipart para o Groq, e multipart precisa de binário de verdade —\n  // é esta a conversão.\n  const b64 = String(entrada.base64 ?? entrada.media ?? '').trim();\n  if (!b64) {\n    throw new Error(\n      'A Evolution não devolveu base64. Confira se o Baixa Áudio está usando '\n      + 'POST /chat/getBase64FromMediaMessage/{instancia} e mandando o id da '\n      + 'mensagem no corpo.'\n    );\n  }\n\n  // O WhatsApp manda voz em Opus dentro de container OGG. O Groq aceita ogg,\n  // então não há conversão a fazer — só embrulhar.\n  const mime = String(entrada.mimetype ?? 'audio/ogg').split(';')[0];\n\n  return [{\n    json: {},\n    binary: {\n      data: await ctx.helpers.prepareBinaryData(\n        Buffer.from(b64, 'base64'), 'audio.ogg', mime\n      ),\n    },\n  }];\n}\n\nif (MODO === 'texto') {\n  // Resposta do Groq: { text: \"...\" }\n  const texto = String(entrada.text ?? entrada.texto ?? '').trim();\n\n  // Transcrição vazia é áudio que não deu para entender — barulho, engano de\n  // botão, três segundos de silêncio. Devolver `[]` faria o lead sumir sem\n  // resposta; melhor pedir que repita, e é o Qualifica quem redige isso.\n  const daFiltra = $('Filtra Mensagem').first().json;\n\n  return [{\n    json: {\n      jid: daFiltra.jid,\n      telefone: daFiltra.telefone,\n      nome_whatsapp: daFiltra.nome_whatsapp,\n      instancia: daFiltra.instancia,\n      tipo: 'audio',\n      transcricao_vazia: texto.length === 0,\n      texto: texto || '[o lead mandou um áudio que não deu para entender]',\n    },\n  }];\n}\n\nthrow new Error(`MODO inválido: \"${MODO}\". Use 'binario' ou 'texto'.`);\n"
+      },
+      "id": "n-05",
+      "name": "Converte Base64",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/audio/transcriptions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.GROQ_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "data"
+            },
+            {
+              "name": "model",
+              "value": "whisper-large-v3-turbo"
+            },
+            {
+              "name": "language",
+              "value": "pt"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "n-06",
+      "name": "Transcreve",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "/**\n * Ramo de áudio — os dois nós Code que cercam a transcrição.\n *\n * Fluxo:\n *\n *   Filtra Mensagem\n *     ├─ Só Texto ────────────────────────────────────────────┐\n *     └─ Só Áudio                                             │\n *          ↓                                                  │\n *        Baixa Áudio (HTTP → Evolution getBase64FromMediaMessage)\n *          ↓                                                  │\n *        Converte Base64 (Code, este arquivo, modo=\"binario\") │\n *          ↓                                                  │\n *        Transcreve (HTTP → Groq, multipart)                  │\n *          ↓                                                  │\n *        Monta Texto (Code, este arquivo, modo=\"texto\") ──────┤\n *                                                             ▼\n *                                                        Lê Buffer\n *\n * Os dois ramos entram no mesmo `Lê Buffer`. Só um deles roda por mensagem —\n * o outro morreu com `[]` lá no roteador — e é por isso que quem vem depois\n * precisa perguntar qual rodou em vez de assumir.\n *\n * Nó Code, modo \"Run Once for All Items\".\n * Requer no container: GROQ_API_KEY (o nó Transcreve usa).\n */\n\n// ─── ao colar, ajuste só isto ────────────────────────────────────────────\nconst MODO = 'texto'; // 'binario' depois do Baixa Áudio, 'texto' depois do Transcreve\n// ─────────────────────────────────────────────────────────────────────────\n\nconst ctx = this;\nconst entrada = $input.first().json;\n\nif (MODO === 'binario') {\n  // A Evolution devolve o arquivo em base64 dentro do JSON. O nó Transcreve\n  // manda multipart para o Groq, e multipart precisa de binário de verdade —\n  // é esta a conversão.\n  const b64 = String(entrada.base64 ?? entrada.media ?? '').trim();\n  if (!b64) {\n    throw new Error(\n      'A Evolution não devolveu base64. Confira se o Baixa Áudio está usando '\n      + 'POST /chat/getBase64FromMediaMessage/{instancia} e mandando o id da '\n      + 'mensagem no corpo.'\n    );\n  }\n\n  // O WhatsApp manda voz em Opus dentro de container OGG. O Groq aceita ogg,\n  // então não há conversão a fazer — só embrulhar.\n  const mime = String(entrada.mimetype ?? 'audio/ogg').split(';')[0];\n\n  return [{\n    json: {},\n    binary: {\n      data: await ctx.helpers.prepareBinaryData(\n        Buffer.from(b64, 'base64'), 'audio.ogg', mime\n      ),\n    },\n  }];\n}\n\nif (MODO === 'texto') {\n  // Resposta do Groq: { text: \"...\" }\n  const texto = String(entrada.text ?? entrada.texto ?? '').trim();\n\n  // Transcrição vazia é áudio que não deu para entender — barulho, engano de\n  // botão, três segundos de silêncio. Devolver `[]` faria o lead sumir sem\n  // resposta; melhor pedir que repita, e é o Qualifica quem redige isso.\n  const daFiltra = $('Filtra Mensagem').first().json;\n\n  return [{\n    json: {\n      jid: daFiltra.jid,\n      telefone: daFiltra.telefone,\n      nome_whatsapp: daFiltra.nome_whatsapp,\n      instancia: daFiltra.instancia,\n      tipo: 'audio',\n      transcricao_vazia: texto.length === 0,\n      texto: texto || '[o lead mandou um áudio que não deu para entender]',\n    },\n  }];\n}\n\nthrow new Error(`MODO inválido: \"${MODO}\". Use 'binario' ou 'texto'.`);\n"
+      },
+      "id": "n-07",
+      "name": "Monta Texto",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "propertyName": "buffer_raw",
+        "key": "=buffer:{{ $('Filtra Mensagem').first().json.telefone }}",
+        "keyType": "automatic",
+        "options": {}
+      },
+      "id": "n-08",
+      "name": "Lê Buffer",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "/**\n * Nó \"Confere Debounce\" — decide se esta execução é a que responde.\n *\n * O problema: o lead manda \"oi\", \"tudo bem?\", \"queria um orçamento\" em três\n * mensagens seguidas. Sem debounce o bot responde três vezes e a conversa\n * desanda. É obrigatório — está no CLAUDE.md.\n *\n * A ideia: toda mensagem que chega grava a própria id de execução numa chave\n * do Redis. Depois de esperar 8s, cada execução relê a chave. Só continua\n * quem ainda estiver lá — ou seja, a última a chegar. As outras morrem em\n * silêncio, e a última responde por todas.\n *\n * Nó Code, modo \"Run Once for All Items\".\n *\n * Posição no canvas:\n *\n *   Filtra Mensagem\n *        ↓\n *   Lê Buffer (Redis GET  buffer:{jid})\n *        ↓\n *   Marca Vez (Code, este arquivo, modo=\"marcar\")\n *        ↓\n *   Grava Buffer (Redis SET buffer:{jid}, TTL 120)\n *   Marca Token  (Redis SET debounce:{jid} = id da execução, TTL 120)\n *        ↓\n *   Espera 8s (Wait)\n *        ↓\n *   Relê Token (Redis GET debounce:{jid})\n *        ↓\n *   Confere Debounce (Code, este arquivo, modo=\"conferir\")\n *        ↓\n *   IF continuar == true → segue para a qualificação\n *\n * Os dois modos vivem no mesmo arquivo porque são as duas metades da mesma\n * regra; separá-los em dois arquivos faz um ser alterado sem o outro.\n * Escolha o modo pela constante abaixo ao colar em cada nó.\n */\n\n// ─── ao colar, ajuste só isto ────────────────────────────────────────────\nconst MODO = 'marcar'; // 'marcar' antes do Wait, 'conferir' depois\n// ─────────────────────────────────────────────────────────────────────────\n\nconst JANELA_MS = 8000; // o debounce em si é o nó Wait; isto é só documentação\n\nconst entrada = $input.first().json;\n\n// Cada nó Redis devolve SÓ a propriedade que setou e descarta o resto do\n// item. Com vários deles em série, o que chega no `$input` é sempre só o\n// último valor lido — tudo o mais tem que ser buscado pelo nome do nó.\n// Ler de `$input` aqui não dá erro: dá `undefined`, que é pior.\nfunction daFiltra(campo) {\n  return $('Filtra Mensagem').first().json[campo];\n}\n\n// Referenciar com `$()` um nó que não rodou derruba o nó inteiro. Como\n// texto e áudio são ramos alternativos, o `Monta Texto` fica sem executar\n// em toda mensagem digitada — tem que ser lido atrás de uma guarda.\nfunction noOpcional(nome) {\n  try {\n    return $(nome).isExecuted ? $(nome).first().json : null;\n  } catch (e) {\n    return null;\n  }\n}\n\n// O texto da conversa vem do ramo que rodou: transcrição, se veio áudio;\n// o que a pessoa digitou, caso contrário. Assumir um dos dois é o erro que\n// derrubou o Monta Entrada do agente pessoal.\nfunction textoDaConversa() {\n  const audio = noOpcional('Monta Texto');\n  if (audio && audio.texto) return audio.texto;\n  return daFiltra('texto');\n}\n\n// O jid vem do Filtra Mensagem e é a identidade da conversa em tudo:\n// chave de buffer, de debounce e de estado.\nconst jid = String(entrada.jid ?? daFiltra('jid') ?? '');\nconst telefone = jid.split('@')[0];\n\nif (!telefone) {\n  throw new Error('Sem jid — o Filtra Mensagem não passou a identidade da conversa.');\n}\n\nif (MODO === 'marcar') {\n  // O `Lê Buffer` que vem logo antes deixou só `buffer_raw` no item, então o\n  // texto vem pelo nome do nó — e de qual nó depende do ramo que rodou.\n  const texto = String(entrada.texto ?? textoDaConversa() ?? '').trim();\n\n  // O buffer acumula as mensagens da rajada para a vencedora ler todas.\n  //\n  // Isto é um read-modify-write: duas mensagens que chegam no mesmo instante\n  // podem ler o mesmo buffer e uma sobrescrever a outra. A janela é de uns\n  // 100ms e o pior caso é perder uma mensagem da rajada, com as outras e o\n  // histórico ainda no lugar.\n  //\n  // Se o nó Redis desta instalação oferecer a operação `push`, prefira: lista\n  // é append atômico e a corrida deixa de existir. Aí este nó só monta o\n  // texto e o push vira o \"Grava Buffer\".\n  let anteriores = [];\n  try {\n    const bruto = entrada.buffer_raw;\n    const v = bruto ? JSON.parse(bruto) : [];\n    if (Array.isArray(v)) anteriores = v;\n  } catch (e) {\n    anteriores = [];\n  }\n\n  const buffer = texto ? [...anteriores, texto] : anteriores;\n\n  return [{\n    json: {\n      jid,\n      telefone,\n      // Quem chegar depois sobrescreve, e é isso que faz a última vencer.\n      token: String($execution.id),\n      buffer: JSON.stringify(buffer),\n      janela_ms: JANELA_MS,\n    },\n  }];\n}\n\nif (MODO === 'conferir') {\n  // O `Relê Buffer` vem depois do `Relê Token` e descartou o token do item.\n  // Buscar pelo nome é obrigatório aqui — de `$input` viria undefined, e o\n  // nó concluiria que ninguém superou ninguém, respondendo em duplicata.\n  const tokenAtual = String(\n    entrada.token_atual ?? $('Relê Token').first().json.token_atual ?? ''\n  ).trim();\n  const meuToken = String($execution.id);\n\n  // Chegou mensagem depois da minha: ela responde por mim. Saio sem falar.\n  if (tokenAtual && tokenAtual !== meuToken) {\n    return [{\n      json: {\n        continuar: false,\n        jid,\n        telefone,\n        motivo: `execução ${meuToken} superada por ${tokenAtual}`,\n      },\n    }];\n  }\n\n  // Token vazio significa que a chave expirou (TTL curto demais para a\n  // janela) ou que alguém limpou o Redis. Seguir é melhor que ficar mudo:\n  // pior caso o bot responde duas vezes; o outro caso é não responder nunca.\n  let mensagens = [];\n  try {\n    const v = entrada.buffer_raw ? JSON.parse(entrada.buffer_raw) : [];\n    if (Array.isArray(v)) mensagens = v;\n  } catch (e) {\n    mensagens = [];\n  }\n\n  const texto = mensagens.join('\\n').trim()\n    || String(entrada.texto ?? textoDaConversa() ?? '').trim();\n\n  return [{\n    json: {\n      continuar: true,\n      jid,\n      telefone,\n      // As três mensagens da rajada viram um texto só para o modelo.\n      texto,\n      mensagens_na_rajada: mensagens.length,\n      token: meuToken,\n    },\n  }];\n}\n\nthrow new Error(`MODO inválido: \"${MODO}\". Use 'marcar' ou 'conferir'.`);\n"
+      },
+      "id": "n-09",
       "name": "Marca Vez",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        660,
+        880,
         0
       ]
     },
@@ -72,12 +192,12 @@
         "ttl": 120,
         "options": {}
       },
-      "id": "n-04",
+      "id": "n-10",
       "name": "Grava Buffer",
       "type": "n8n-nodes-base.redis",
       "typeVersion": 1,
       "position": [
-        880,
+        1100,
         0
       ]
     },
@@ -91,12 +211,12 @@
         "ttl": 120,
         "options": {}
       },
-      "id": "n-05",
+      "id": "n-11",
       "name": "Marca Token",
       "type": "n8n-nodes-base.redis",
       "typeVersion": 1,
       "position": [
-        1100,
+        1320,
         0
       ]
     },
@@ -105,12 +225,12 @@
         "amount": 8,
         "unit": "seconds"
       },
-      "id": "n-06",
+      "id": "n-12",
       "name": "Espera 8s",
       "type": "n8n-nodes-base.wait",
       "typeVersion": 1.1,
       "position": [
-        1320,
+        1540,
         0
       ]
     },
@@ -122,13 +242,13 @@
         "keyType": "automatic",
         "options": {}
       },
-      "id": "n-07",
+      "id": "n-13",
       "name": "Relê Token",
       "type": "n8n-nodes-base.redis",
       "typeVersion": 1,
       "position": [
         0,
-        240
+        480
       ]
     },
     {
@@ -139,27 +259,27 @@
         "keyType": "automatic",
         "options": {}
       },
-      "id": "n-08",
+      "id": "n-14",
       "name": "Relê Buffer",
       "type": "n8n-nodes-base.redis",
       "typeVersion": 1,
       "position": [
         220,
-        240
+        480
       ]
     },
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "/**\n * Nó \"Confere Debounce\" — decide se esta execução é a que responde.\n *\n * O problema: o lead manda \"oi\", \"tudo bem?\", \"queria um orçamento\" em três\n * mensagens seguidas. Sem debounce o bot responde três vezes e a conversa\n * desanda. É obrigatório — está no CLAUDE.md.\n *\n * A ideia: toda mensagem que chega grava a própria id de execução numa chave\n * do Redis. Depois de esperar 8s, cada execução relê a chave. Só continua\n * quem ainda estiver lá — ou seja, a última a chegar. As outras morrem em\n * silêncio, e a última responde por todas.\n *\n * Nó Code, modo \"Run Once for All Items\".\n *\n * Posição no canvas:\n *\n *   Filtra Mensagem\n *        ↓\n *   Lê Buffer (Redis GET  buffer:{jid})\n *        ↓\n *   Marca Vez (Code, este arquivo, modo=\"marcar\")\n *        ↓\n *   Grava Buffer (Redis SET buffer:{jid}, TTL 120)\n *   Marca Token  (Redis SET debounce:{jid} = id da execução, TTL 120)\n *        ↓\n *   Espera 8s (Wait)\n *        ↓\n *   Relê Token (Redis GET debounce:{jid})\n *        ↓\n *   Confere Debounce (Code, este arquivo, modo=\"conferir\")\n *        ↓\n *   IF continuar == true → segue para a qualificação\n *\n * Os dois modos vivem no mesmo arquivo porque são as duas metades da mesma\n * regra; separá-los em dois arquivos faz um ser alterado sem o outro.\n * Escolha o modo pela constante abaixo ao colar em cada nó.\n */\n\n// ─── ao colar, ajuste só isto ────────────────────────────────────────────\nconst MODO = 'conferir'; // 'marcar' antes do Wait, 'conferir' depois\n// ─────────────────────────────────────────────────────────────────────────\n\nconst JANELA_MS = 8000; // o debounce em si é o nó Wait; isto é só documentação\n\nconst entrada = $input.first().json;\n\n// Cada nó Redis devolve SÓ a propriedade que setou e descarta o resto do\n// item. Com vários deles em série, o que chega no `$input` é sempre só o\n// último valor lido — tudo o mais tem que ser buscado pelo nome do nó.\n// Ler de `$input` aqui não dá erro: dá `undefined`, que é pior.\nfunction daFiltra(campo) {\n  return $('Filtra Mensagem').first().json[campo];\n}\n\n// O jid vem do Filtra Mensagem e é a identidade da conversa em tudo:\n// chave de buffer, de debounce e de estado.\nconst jid = String(entrada.jid ?? daFiltra('jid') ?? '');\nconst telefone = jid.split('@')[0];\n\nif (!telefone) {\n  throw new Error('Sem jid — o Filtra Mensagem não passou a identidade da conversa.');\n}\n\nif (MODO === 'marcar') {\n  // O `Lê Buffer` que vem logo antes deixou só `buffer_raw` no item, então o\n  // texto vem do Filtra Mensagem pelo nome, não do $input.\n  const texto = String(entrada.texto ?? daFiltra('texto') ?? '').trim();\n\n  // O buffer acumula as mensagens da rajada para a vencedora ler todas.\n  //\n  // Isto é um read-modify-write: duas mensagens que chegam no mesmo instante\n  // podem ler o mesmo buffer e uma sobrescrever a outra. A janela é de uns\n  // 100ms e o pior caso é perder uma mensagem da rajada, com as outras e o\n  // histórico ainda no lugar.\n  //\n  // Se o nó Redis desta instalação oferecer a operação `push`, prefira: lista\n  // é append atômico e a corrida deixa de existir. Aí este nó só monta o\n  // texto e o push vira o \"Grava Buffer\".\n  let anteriores = [];\n  try {\n    const bruto = entrada.buffer_raw;\n    const v = bruto ? JSON.parse(bruto) : [];\n    if (Array.isArray(v)) anteriores = v;\n  } catch (e) {\n    anteriores = [];\n  }\n\n  const buffer = texto ? [...anteriores, texto] : anteriores;\n\n  return [{\n    json: {\n      jid,\n      telefone,\n      // Quem chegar depois sobrescreve, e é isso que faz a última vencer.\n      token: String($execution.id),\n      buffer: JSON.stringify(buffer),\n      janela_ms: JANELA_MS,\n    },\n  }];\n}\n\nif (MODO === 'conferir') {\n  // O `Relê Buffer` vem depois do `Relê Token` e descartou o token do item.\n  // Buscar pelo nome é obrigatório aqui — de `$input` viria undefined, e o\n  // nó concluiria que ninguém superou ninguém, respondendo em duplicata.\n  const tokenAtual = String(\n    entrada.token_atual ?? $('Relê Token').first().json.token_atual ?? ''\n  ).trim();\n  const meuToken = String($execution.id);\n\n  // Chegou mensagem depois da minha: ela responde por mim. Saio sem falar.\n  if (tokenAtual && tokenAtual !== meuToken) {\n    return [{\n      json: {\n        continuar: false,\n        jid,\n        telefone,\n        motivo: `execução ${meuToken} superada por ${tokenAtual}`,\n      },\n    }];\n  }\n\n  // Token vazio significa que a chave expirou (TTL curto demais para a\n  // janela) ou que alguém limpou o Redis. Seguir é melhor que ficar mudo:\n  // pior caso o bot responde duas vezes; o outro caso é não responder nunca.\n  let mensagens = [];\n  try {\n    const v = entrada.buffer_raw ? JSON.parse(entrada.buffer_raw) : [];\n    if (Array.isArray(v)) mensagens = v;\n  } catch (e) {\n    mensagens = [];\n  }\n\n  const texto = mensagens.join('\\n').trim()\n    || String(entrada.texto ?? daFiltra('texto') ?? '').trim();\n\n  return [{\n    json: {\n      continuar: true,\n      jid,\n      telefone,\n      // As três mensagens da rajada viram um texto só para o modelo.\n      texto,\n      mensagens_na_rajada: mensagens.length,\n      token: meuToken,\n    },\n  }];\n}\n\nthrow new Error(`MODO inválido: \"${MODO}\". Use 'marcar' ou 'conferir'.`);\n"
+        "jsCode": "/**\n * Nó \"Confere Debounce\" — decide se esta execução é a que responde.\n *\n * O problema: o lead manda \"oi\", \"tudo bem?\", \"queria um orçamento\" em três\n * mensagens seguidas. Sem debounce o bot responde três vezes e a conversa\n * desanda. É obrigatório — está no CLAUDE.md.\n *\n * A ideia: toda mensagem que chega grava a própria id de execução numa chave\n * do Redis. Depois de esperar 8s, cada execução relê a chave. Só continua\n * quem ainda estiver lá — ou seja, a última a chegar. As outras morrem em\n * silêncio, e a última responde por todas.\n *\n * Nó Code, modo \"Run Once for All Items\".\n *\n * Posição no canvas:\n *\n *   Filtra Mensagem\n *        ↓\n *   Lê Buffer (Redis GET  buffer:{jid})\n *        ↓\n *   Marca Vez (Code, este arquivo, modo=\"marcar\")\n *        ↓\n *   Grava Buffer (Redis SET buffer:{jid}, TTL 120)\n *   Marca Token  (Redis SET debounce:{jid} = id da execução, TTL 120)\n *        ↓\n *   Espera 8s (Wait)\n *        ↓\n *   Relê Token (Redis GET debounce:{jid})\n *        ↓\n *   Confere Debounce (Code, este arquivo, modo=\"conferir\")\n *        ↓\n *   IF continuar == true → segue para a qualificação\n *\n * Os dois modos vivem no mesmo arquivo porque são as duas metades da mesma\n * regra; separá-los em dois arquivos faz um ser alterado sem o outro.\n * Escolha o modo pela constante abaixo ao colar em cada nó.\n */\n\n// ─── ao colar, ajuste só isto ────────────────────────────────────────────\nconst MODO = 'conferir'; // 'marcar' antes do Wait, 'conferir' depois\n// ─────────────────────────────────────────────────────────────────────────\n\nconst JANELA_MS = 8000; // o debounce em si é o nó Wait; isto é só documentação\n\nconst entrada = $input.first().json;\n\n// Cada nó Redis devolve SÓ a propriedade que setou e descarta o resto do\n// item. Com vários deles em série, o que chega no `$input` é sempre só o\n// último valor lido — tudo o mais tem que ser buscado pelo nome do nó.\n// Ler de `$input` aqui não dá erro: dá `undefined`, que é pior.\nfunction daFiltra(campo) {\n  return $('Filtra Mensagem').first().json[campo];\n}\n\n// Referenciar com `$()` um nó que não rodou derruba o nó inteiro. Como\n// texto e áudio são ramos alternativos, o `Monta Texto` fica sem executar\n// em toda mensagem digitada — tem que ser lido atrás de uma guarda.\nfunction noOpcional(nome) {\n  try {\n    return $(nome).isExecuted ? $(nome).first().json : null;\n  } catch (e) {\n    return null;\n  }\n}\n\n// O texto da conversa vem do ramo que rodou: transcrição, se veio áudio;\n// o que a pessoa digitou, caso contrário. Assumir um dos dois é o erro que\n// derrubou o Monta Entrada do agente pessoal.\nfunction textoDaConversa() {\n  const audio = noOpcional('Monta Texto');\n  if (audio && audio.texto) return audio.texto;\n  return daFiltra('texto');\n}\n\n// O jid vem do Filtra Mensagem e é a identidade da conversa em tudo:\n// chave de buffer, de debounce e de estado.\nconst jid = String(entrada.jid ?? daFiltra('jid') ?? '');\nconst telefone = jid.split('@')[0];\n\nif (!telefone) {\n  throw new Error('Sem jid — o Filtra Mensagem não passou a identidade da conversa.');\n}\n\nif (MODO === 'marcar') {\n  // O `Lê Buffer` que vem logo antes deixou só `buffer_raw` no item, então o\n  // texto vem pelo nome do nó — e de qual nó depende do ramo que rodou.\n  const texto = String(entrada.texto ?? textoDaConversa() ?? '').trim();\n\n  // O buffer acumula as mensagens da rajada para a vencedora ler todas.\n  //\n  // Isto é um read-modify-write: duas mensagens que chegam no mesmo instante\n  // podem ler o mesmo buffer e uma sobrescrever a outra. A janela é de uns\n  // 100ms e o pior caso é perder uma mensagem da rajada, com as outras e o\n  // histórico ainda no lugar.\n  //\n  // Se o nó Redis desta instalação oferecer a operação `push`, prefira: lista\n  // é append atômico e a corrida deixa de existir. Aí este nó só monta o\n  // texto e o push vira o \"Grava Buffer\".\n  let anteriores = [];\n  try {\n    const bruto = entrada.buffer_raw;\n    const v = bruto ? JSON.parse(bruto) : [];\n    if (Array.isArray(v)) anteriores = v;\n  } catch (e) {\n    anteriores = [];\n  }\n\n  const buffer = texto ? [...anteriores, texto] : anteriores;\n\n  return [{\n    json: {\n      jid,\n      telefone,\n      // Quem chegar depois sobrescreve, e é isso que faz a última vencer.\n      token: String($execution.id),\n      buffer: JSON.stringify(buffer),\n      janela_ms: JANELA_MS,\n    },\n  }];\n}\n\nif (MODO === 'conferir') {\n  // O `Relê Buffer` vem depois do `Relê Token` e descartou o token do item.\n  // Buscar pelo nome é obrigatório aqui — de `$input` viria undefined, e o\n  // nó concluiria que ninguém superou ninguém, respondendo em duplicata.\n  const tokenAtual = String(\n    entrada.token_atual ?? $('Relê Token').first().json.token_atual ?? ''\n  ).trim();\n  const meuToken = String($execution.id);\n\n  // Chegou mensagem depois da minha: ela responde por mim. Saio sem falar.\n  if (tokenAtual && tokenAtual !== meuToken) {\n    return [{\n      json: {\n        continuar: false,\n        jid,\n        telefone,\n        motivo: `execução ${meuToken} superada por ${tokenAtual}`,\n      },\n    }];\n  }\n\n  // Token vazio significa que a chave expirou (TTL curto demais para a\n  // janela) ou que alguém limpou o Redis. Seguir é melhor que ficar mudo:\n  // pior caso o bot responde duas vezes; o outro caso é não responder nunca.\n  let mensagens = [];\n  try {\n    const v = entrada.buffer_raw ? JSON.parse(entrada.buffer_raw) : [];\n    if (Array.isArray(v)) mensagens = v;\n  } catch (e) {\n    mensagens = [];\n  }\n\n  const texto = mensagens.join('\\n').trim()\n    || String(entrada.texto ?? textoDaConversa() ?? '').trim();\n\n  return [{\n    json: {\n      continuar: true,\n      jid,\n      telefone,\n      // As três mensagens da rajada viram um texto só para o modelo.\n      texto,\n      mensagens_na_rajada: mensagens.length,\n      token: meuToken,\n    },\n  }];\n}\n\nthrow new Error(`MODO inválido: \"${MODO}\". Use 'marcar' ou 'conferir'.`);\n"
       },
-      "id": "n-09",
+      "id": "n-15",
       "name": "Confere Debounce",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
         440,
-        240
+        480
       ]
     },
     {
@@ -170,13 +290,13 @@
         "keyType": "automatic",
         "options": {}
       },
-      "id": "n-10",
+      "id": "n-16",
       "name": "Lê Estado",
       "type": "n8n-nodes-base.redis",
       "typeVersion": 1,
       "position": [
         660,
-        240
+        480
       ]
     },
     {
@@ -184,13 +304,13 @@
         "mode": "runOnceForAllItems",
         "jsCode": "/**\n * Nó \"Qualifica\" — uma chamada ao modelo por turno, JSON estrito na volta.\n *\n * Diferente do agente pessoal: aqui **não há laço de tool use**. O SDR não\n * executa nada, ele conversa e preenche campos. Uma chamada, uma resposta —\n * é o que o CLAUDE.md manda, e é o que segura o custo e a latência.\n *\n * Nó Code, modo \"Run Once for All Items\".\n *\n * Canvas:\n *\n *   Webhook → Filtra Mensagem → [debounce: ver no-debounce.js] → IF continuar\n *        ↓\n *   Lê Estado (Redis GET estado:{telefone})\n *        ↓\n *   Qualifica (Code, este arquivo)\n *        ↓\n *   IF enviar → Envia (HTTP, Evolution sendText)\n *        ↓\n *   Grava Estado (Redis SET estado:{telefone}, TTL 30 dias)\n *\n * Entrada esperada no item:\n *   telefone    — só dígitos\n *   texto       — mensagens da rajada já juntadas pelo debounce\n *   estado_raw  — JSON do Redis, ou vazio na primeira mensagem\n *\n * Saída:\n *   enviar, resposta, campos, intencao, handoff, motivo_handoff,\n *   completo, temperatura, estado (JSON para o Redis)\n *\n * Requer no container: ANTHROPIC_API_KEY\n */\n\n// ═══════════════════════════════════════════════════════ config do cliente\n//\n// Espelha prompts/clientes/alessio.md. Está inline porque o Code node não\n// alcança o Postgres — quando existir a tabela `clientes`, isto vira um nó\n// Postgres antes deste, no mesmo padrão que o `Carrega Config` do v2, e o\n// objeto sai daqui inteiro. Foi escrito como um objeto só por causa disso.\n\nconst CLIENTE = {\n  empresa: 'Alessio Segurança e Climatização',\n  atendente: 'Samir',\n  cidade: 'Campo Grande / MS',\n\n  // Sem menu numerado: ele lia como formulário e obrigava a pessoa a\n  // traduzir o problema dela para uma das sete caixas. Esta lista agora é\n  // catálogo para o modelo saber o que a empresa faz, não script.\n  servicos: [\n    { rotulo: 'câmeras de segurança', valor: 'camera' },\n    { rotulo: 'ar condicionado', valor: 'ar_condicionado' },\n    { rotulo: 'cerca elétrica', valor: 'cerca_eletrica' },\n    { rotulo: 'alarmes', valor: 'alarme' },\n    { rotulo: 'interfones e portões', valor: 'interfone_portao' },\n  ],\n\n  // Frase pré-preenchida pelo Click-to-WhatsApp. O casamento é por trecho\n  // distintivo, sem acento e sem caixa: a pessoa edita o texto antes de\n  // enviar, e o começo é o que ela mais mexe. Mais específico primeiro —\n  // se um dia houver campanha de portão sem wifi, a ordem decide.\n  campanhas: [\n    { trecho: 'motor de portao', servico: 'interfone_portao' },\n  ],\n\n  gatilhosHandoff: [\n    'A pessoa pediu para falar com alguém, de qualquer jeito que tenha pedido.',\n    'É chamado de suporte — já é cliente, com algo instalado.',\n    'Insistiu em preço, prazo ou disponibilidade depois de você já ter recusado uma vez.',\n    'Reclamação, cobrança ou irritação.',\n    'Duas mensagens seguidas que você não entendeu.',\n  ],\n};\n\nconst MODELO = 'claude-sonnet-4-6'; // o CLAUDE.md fixa este para qualificação\nconst MAX_HISTORICO = 20;           // 10 trocas; o histórico é reenviado por turno\n\n// A lição do agente pessoal: sem timeout o helper espera para sempre, a\n// execução pendura e segura um slot de concorrência até alguém reiniciar.\nconst TIMEOUT_MODELO_MS = 60000;\n\n// ═══════════════════════════════════════════════════════════════════ rede\n\nconst ctx = this;\n\nasync function http(opcoes) {\n  try {\n    return await ctx.helpers.httpRequest({ timeout: TIMEOUT_MODELO_MS, ...opcoes });\n  } catch (e) {\n    const expirou = e.code === 'ECONNABORTED' || e.code === 'ETIMEDOUT'\n      || /timeout/i.test(String(e.message));\n    if (expirou) throw new Error(`tempo esgotado em ${opcoes.url}`);\n    const status = e.statusCode ?? e.httpCode ?? '?';\n    let corpo = e.response?.body ?? e.error ?? e.message;\n    if (typeof corpo === 'object') corpo = JSON.stringify(corpo);\n    throw new Error(`${status} em ${opcoes.url} — ${String(corpo).slice(0, 300)}`);\n  }\n}\n\n// ══════════════════════════════════════════════════════════════ entrada\n\nconst entrada = $input.first().json;\n\n// O `Lê Estado` logo antes é um nó Redis, e nó Redis devolve SÓ a\n// propriedade que setou: o que chega no `$input` é `{ estado_raw }`, sem\n// telefone e sem texto. Eles vêm do Confere Debounce, pelo nome do nó.\n//\n// Este erro já apareceu três vezes neste projeto — no Monta Entrada do\n// agente pessoal, no Confere Debounce, e aqui. Toda vez que um nó Redis\n// estiver entre a origem de um dado e quem o consome, busque pelo nome.\nfunction doDebounce(campo) {\n  try {\n    return $('Confere Debounce').first().json[campo];\n  } catch (e) {\n    return undefined; // permite rodar o nó isolado no editor\n  }\n}\n\nconst telefone = String(entrada.telefone ?? doDebounce('telefone') ?? '').trim();\nconst texto = String(entrada.texto ?? doDebounce('texto') ?? '').trim();\n\nif (!telefone) {\n  throw new Error(\n    'Sem telefone na entrada. Confira se o nó anterior se chama exatamente '\n    + '\"Confere Debounce\" — este nó busca telefone e texto por esse nome, '\n    + 'porque o Lê Estado descarta tudo menos o estado_raw.'\n  );\n}\n\nconst ESTADO_VAZIO = {\n  campos: {\n    nome: null, servico: null, tipo_imovel: null,\n    regiao: null, urgencia: null, porte: null,\n  },\n  intencao: 'indefinido',\n  historico: [],\n  handoff: false,\n  origem: null,\n  saudou: false,\n};\n\nlet estado = ESTADO_VAZIO;\ntry {\n  if (entrada.estado_raw) {\n    const v = JSON.parse(entrada.estado_raw);\n    if (v && typeof v === 'object') {\n      estado = {\n        ...ESTADO_VAZIO,\n        ...v,\n        campos: { ...ESTADO_VAZIO.campos, ...(v.campos || {}) },\n        historico: Array.isArray(v.historico) ? v.historico : [],\n      };\n    }\n  }\n} catch (e) {\n  estado = ESTADO_VAZIO; // estado corrompido não pode derrubar o atendimento\n}\n\n// ── conversa já entregue a humano ────────────────────────────────────────\n// Depois do handoff o bot cala. Sem isto ele volta a falar por cima do\n// vendedor no meio da negociação, que é o pior defeito possível aqui.\nif (estado.handoff) {\n  return [{\n    json: {\n      enviar: false,\n      motivo: 'conversa já está com humano',\n      telefone,\n      estado: JSON.stringify(estado),\n    },\n  }];\n}\n\n// ══════════════════════════════════════════════════════════ classificação\n\n// Sem acento e sem caixa, para o casamento das campanhas e do menu.\nfunction normaliza(s) {\n  return String(s)\n    .normalize('NFD')\n    // Escape explícito de propósito: os combinantes literais são invisíveis\n    // no código e este arquivo é colado num textarea do navegador.\n    .replace(/[\\u0300-\\u036f]/g, '')\n    .toLowerCase()\n    .trim();\n}\n\nconst textoNorm = normaliza(texto);\n\n// Primeira mensagem: de onde essa pessoa veio?\nif (!estado.origem) {\n  const campanha = CLIENTE.campanhas.find((c) => textoNorm.includes(normaliza(c.trecho)));\n  if (campanha) {\n    estado.origem = 'anuncio';\n    // Ela já disse o que quer ao clicar no anúncio. Perguntar de novo com um\n    // menu de sete opções é ignorar o que ela acabou de fazer.\n    estado.campos.servico = estado.campos.servico ?? campanha.servico;\n    estado.intencao = 'qualificar';\n  } else {\n    estado.origem = 'desconhecida';\n  }\n}\n\n// Primeiro turno é do modelo também. Saudação fixa fica artificial porque\n// ignora o que a pessoa falou: \"boa tarde\" pede cumprimento, \"quero câmera\n// pra loja, é urgente\" pede resposta ao que foi dito. Quem sabe diferenciar\n// isso é o modelo, e é uma chamada barata.\nconst primeiroTurno = !estado.saudou;\nestado.saudou = true;\n\n// ═════════════════════════════════════════════════════════ system prompt\n\nconst catalogo = CLIENTE.servicos\n  .map((s) => `- ${s.rotulo} (${s.valor})`)\n  .join('\\n');\n\n// O primeiro turno é o que define se a conversa parece atendimento ou\n// formulário. Vale instruções próprias — mas só no turno em que se aplica,\n// senão o modelo fica se reapresentando no meio da conversa.\nconst instrucaoAbertura = primeiroTurno ? `\n\n## Esta é a primeira mensagem desta pessoa\n\nAbra a conversa. Três coisas, em 3 ou 4 linhas no total:\n\n1. Cumprimente e diga quem você é — seu nome e a empresa.\n2. Uma frase que mostre competência **pelo concreto**, não pelo adjetivo:\n   o que a empresa instala. Nada de \"somos referência\", \"excelência\",\n   \"melhor do mercado\" — isso soa a panfleto e tira autoridade em vez de dar.\n3. Uma pergunta só, aberta, sobre o que a pessoa precisa.\n\n**Se ela já disse o que quer na primeira mensagem, não devolva um cumprimento\ngenérico por cima.** Reconheça o que ela falou, apresente-se em meia linha e\njá pergunte a próxima coisa que falta. Ignorar o que a pessoa acabou de\nescrever é o que faz atendimento automático parecer automático.\n\nNunca ofereça lista numerada de opções. Se ela não disse o que precisa,\npergunte com uma frase — e pode citar os serviços no meio da frase,\nnaturalmente, sem virar menu.` : '';\n\nconst systemPrompt = `Você é ${CLIENTE.atendente}, do primeiro atendimento da ${CLIENTE.empresa}, em ${CLIENTE.cidade}, pelo WhatsApp.\n\nSeu trabalho é entender o que a pessoa precisa e reunir cinco informações.\nVocê NÃO vende, NÃO orça e NÃO agenda — quem faz isso é o vendedor. Você\ndescobre o suficiente para ele entrar na conversa já sabendo com quem fala.\n\n## Serviços deste cliente\n${catalogo}\n\n## As cinco informações\n1. nome — primeiro nome basta\n2. servico — o que a pessoa procura\n3. tipo_imovel — residencia, comercio, industria, condominio ou rural\n4. regiao — bairro ou cidade\n5. urgencia — imediata, esta_semana, este_mes ou pesquisando\n\nE um sexto campo, porte, que NÃO tem pergunta própria: deduza do que a pessoa\ncontar se é um ponto só (ponto_unico), um ambiente, ou um sistema_completo.\nSe não der para deduzir, deixe null. Ninguém responde \"qual o porte do meu\nprojeto\".\n\n## Como conversar\n- Uma pergunta por mensagem. Duas juntas fazem a pessoa responder uma só.\n- 2 a 5 linhas. Português falado, não formulário.\n- NUNCA pergunte o que já sabe — o que já foi coletado vem abaixo.\n- Se ela der duas informações de uma vez, registre as duas e pule adiante.\n- Se ela perguntar algo, responda antes de continuar perguntando.\n- Se ela não quiser responder, deixe null e siga. Não insista duas vezes.\n- Pergunte primeiro o que muda o resto: serviço, tipo de imóvel, urgência,\n  região. O nome, cedo, quando encaixar.\n\n## O que você não faz, sem exceção\n- Não fala de preço, prazo ou disponibilidade. Nem faixa, nem estimativa,\n  nem \"a partir de\". Quem passa valor é o vendedor.\n- NÃO diz se a região é atendida ou não — nem que sim, nem que não. Não há\n  faixa fixa de atendimento: depende da região junto com o tamanho do\n  projeto, e quem decide é o vendedor. Anote a região, entenda o tamanho, e\n  siga. Se perguntarem direto, diga que quem confirma isso é o vendedor.\n- Não marca visita nem agenda horário.\n- Não promete retorno em tempo determinado. O atendimento é 24 horas, mas o\n  humano não — nunca diga quando alguém vai responder.\n\nInsistência depois de uma recusa é motivo de handoff, não motivo de ceder.\n\n## Quando chamar um humano (handoff: true)\n${CLIENTE.gatilhosHandoff.map((g) => `- ${g}`).join('\\n')}\n\nNo handoff a resposta avisa em uma linha que alguém vai assumir, sem dizer\nquando.\n\n## Intenção\n- qualificar — quer contratar algo\n- vendedor — pediu vendedor direto\n- suporte — já é cliente, é sobre algo instalado\n- indefinido — ainda não dá para saber\n\nCliente com problema NÃO é lead. Quem escreve sobre equipamento que já tem vai\npara suporte, e aí você não pergunta região nem urgência — soa como se você\nnão tivesse lido o que ele disse. O contrário também vale: quem começa\nfalando de defeito mas descreve uma instalação nova é qualificar.\n\nNão há menu nem número para a pessoa digitar. Ela vai pedir com as palavras\ndela — \"quero pôr câmera\", \"meu portão não abre\", \"quanto custa um ar\" — e é\ndisso que você tira o serviço e a intenção.\n${instrucaoAbertura}\n\n## O que você já sabe desta conversa\nOrigem do contato: ${estado.origem}\n${Object.entries(estado.campos)\n  .map(([k, v]) => `- ${k}: ${v === null ? '(falta)' : v}`)\n  .join('\\n')}\n\nUse a ferramenta responder para devolver sua resposta. Não escreva texto fora\ndela.`;\n\n// ══════════════════════════════════════════════════════════════ ferramenta\n//\n// Forçar tool use é o que garante JSON válido. Pedir \"responda só JSON\" no\n// prompt funciona quase sempre, e \"quase sempre\" aqui significa uma conversa\n// perdida por semana.\n//\n// Este schema é o dialeto da API do de prompts/schema-saida.json — que\n// continua sendo o contrato. A diferença: a API ignora `if/then`, então a\n// regra \"handoff exige motivo\" é conferida em código, mais abaixo.\n\nconst FERRAMENTA = {\n  name: 'responder',\n  description: 'Devolve a resposta ao lead e o estado atualizado da qualificação.',\n  input_schema: {\n    type: 'object',\n    required: ['resposta', 'intencao', 'campos', 'handoff', 'completo'],\n    properties: {\n      resposta: {\n        type: 'string',\n        description: 'Texto que vai para o WhatsApp. 2 a 5 linhas.',\n      },\n      intencao: {\n        type: 'string',\n        enum: ['qualificar', 'vendedor', 'suporte', 'indefinido'],\n      },\n      campos: {\n        type: 'object',\n        required: ['nome', 'servico', 'tipo_imovel', 'regiao', 'urgencia', 'porte'],\n        description: 'Sempre inteiro, com null no que falta. Nunca omita uma '\n                   + 'chave e nunca apague algo já coletado.',\n        properties: {\n          nome: { type: ['string', 'null'] },\n          servico: {\n            type: ['string', 'null'],\n            enum: ['camera', 'ar_condicionado', 'cerca_eletrica', 'alarme',\n                   'interfone_portao', 'outro', null],\n          },\n          tipo_imovel: {\n            type: ['string', 'null'],\n            enum: ['residencia', 'comercio', 'industria', 'condominio', 'rural', null],\n          },\n          regiao: { type: ['string', 'null'] },\n          urgencia: {\n            type: ['string', 'null'],\n            enum: ['imediata', 'esta_semana', 'este_mes', 'pesquisando', null],\n          },\n          porte: {\n            type: ['string', 'null'],\n            enum: ['ponto_unico', 'ambiente', 'sistema_completo', null],\n          },\n        },\n      },\n      completo: {\n        type: 'boolean',\n        description: 'true quando os CINCO primeiros campos estão preenchidos. '\n                   + 'porte não entra na conta.',\n      },\n      handoff: { type: 'boolean' },\n      motivo_handoff: {\n        type: ['string', 'null'],\n        description: 'Obrigatório quando handoff é true. Frase curta para o '\n                   + 'vendedor ler antes de entrar.',\n      },\n      observacao: { type: ['string', 'null'] },\n    },\n  },\n};\n\n// ══════════════════════════════════════════════════════════════════ chamada\n\nconst mensagens = [\n  ...estado.historico.slice(-MAX_HISTORICO),\n  { role: 'user', content: texto },\n];\n\nconst r = await http({\n  method: 'POST',\n  url: 'https://api.anthropic.com/v1/messages',\n  headers: {\n    'x-api-key': $env.ANTHROPIC_API_KEY,\n    'anthropic-version': '2023-06-01',\n    'content-type': 'application/json',\n  },\n  body: {\n    model: MODELO,\n    max_tokens: 1024,\n    system: systemPrompt,\n    messages: mensagens,\n    tools: [FERRAMENTA],\n    // Sem isto o modelo às vezes responde em texto e o parse quebra.\n    tool_choice: { type: 'tool', name: 'responder' },\n  },\n  json: true,\n});\n\nconst bloco = (r.content || []).find((b) => b.type === 'tool_use' && b.name === 'responder');\nif (!bloco) {\n  throw new Error(\n    `Modelo não usou a ferramenta. stop_reason=${r.stop_reason}. `\n    + `Conteúdo: ${JSON.stringify(r.content).slice(0, 300)}`\n  );\n}\n\nconst saida = bloco.input || {};\n\n// ════════════════════════════════════════════════════════════════ validação\n\n// A regra que o schema expressa com if/then e a API não aplica.\nif (saida.handoff && !String(saida.motivo_handoff || '').trim()) {\n  saida.motivo_handoff = 'Handoff pedido pelo agente, sem motivo declarado.';\n}\n\n// Campo já coletado não pode voltar a null: se o modelo esquecer de repetir\n// algo, o valor antigo prevalece. Perder um campo é pior que teimar nele.\nconst campos = { ...estado.campos };\nfor (const [k, v] of Object.entries(saida.campos || {})) {\n  if (v !== null && v !== undefined && v !== '') campos[k] = v;\n}\n\n// ═══════════════════════════════════════════════════════ régua de temperatura\n//\n// Feita aqui, não pelo modelo. É regra de negócio: muda com o vendedor, e\n// mudar prompt para ajustar régua é como se perde o controle do que o bot faz.\n\nconst CINCO = ['nome', 'servico', 'tipo_imovel', 'regiao', 'urgencia'];\nconst completo = CINCO.every((k) => campos[k] !== null && campos[k] !== undefined);\n\nlet temperatura = 'frio';\nif (completo && ['imediata', 'esta_semana'].includes(campos.urgencia)) {\n  temperatura = 'quente';\n} else if (completo && campos.urgencia === 'este_mes') {\n  temperatura = 'morno';\n}\n\n// Lead quente também é handoff: sentido de existir do fluxo é entregar isso\n// ao vendedor enquanto ainda está quente.\nconst handoff = Boolean(saida.handoff) || temperatura === 'quente';\nconst motivoHandoff = saida.motivo_handoff\n  || (temperatura === 'quente' ? 'Lead quente: cinco campos preenchidos e urgência alta.' : null);\n\nconst resposta = String(saida.resposta || '').trim();\n\n// ══════════════════════════════════════════════════════════════════ saída\n\nconst estadoNovo = {\n  ...estado,\n  campos,\n  intencao: saida.intencao || estado.intencao,\n  handoff,\n  historico: [\n    ...estado.historico,\n    { role: 'user', content: texto },\n    { role: 'assistant', content: resposta },\n  ].slice(-MAX_HISTORICO),\n};\n\nreturn [{\n  json: {\n    enviar: resposta.length > 0,\n    resposta,\n    telefone,\n    campos,\n    intencao: estadoNovo.intencao,\n    completo,\n    temperatura,\n    handoff,\n    motivo_handoff: motivoHandoff,\n    observacao: saida.observacao || null,\n    estado: JSON.stringify(estadoNovo),\n  },\n}];\n"
       },
-      "id": "n-11",
+      "id": "n-17",
       "name": "Qualifica",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
         880,
-        240
+        480
       ]
     },
     {
@@ -203,13 +323,13 @@
         "ttl": 2592000,
         "options": {}
       },
-      "id": "n-12",
+      "id": "n-18",
       "name": "Grava Estado",
       "type": "n8n-nodes-base.redis",
       "typeVersion": 1,
       "position": [
         1100,
-        240
+        480
       ]
     },
     {
@@ -218,13 +338,13 @@
         "key": "=buffer:{{ $('Filtra Mensagem').first().json.telefone }}",
         "options": {}
       },
-      "id": "n-13",
+      "id": "n-19",
       "name": "Limpa Buffer",
       "type": "n8n-nodes-base.redis",
       "typeVersion": 1,
       "position": [
         1320,
-        240
+        480
       ]
     },
     {
@@ -232,13 +352,13 @@
         "mode": "runOnceForAllItems",
         "jsCode": "// Silêncio proposital: conversa já entregue a humano, ou nada a dizer.\n// Devolver [] aqui em vez de um IF é um typeVersion a menos para errar.\nconst j = $('Qualifica').first().json;\nif (!j.enviar) return [];\nreturn [{ json: j }];\n"
       },
-      "id": "n-14",
+      "id": "n-20",
       "name": "Decide Envio",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
         0,
-        480
+        720
       ]
     },
     {
@@ -264,13 +384,13 @@
         },
         "options": {}
       },
-      "id": "n-15",
+      "id": "n-21",
       "name": "Envia WhatsApp",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
         220,
-        480
+        720
       ]
     }
   ],
@@ -287,6 +407,77 @@
       ]
     },
     "Filtra Mensagem": {
+      "main": [
+        [
+          {
+            "node": "Só Texto",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Só Áudio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Só Texto": {
+      "main": [
+        [
+          {
+            "node": "Lê Buffer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Só Áudio": {
+      "main": [
+        [
+          {
+            "node": "Baixa Áudio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Baixa Áudio": {
+      "main": [
+        [
+          {
+            "node": "Converte Base64",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Converte Base64": {
+      "main": [
+        [
+          {
+            "node": "Transcreve",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transcreve": {
+      "main": [
+        [
+          {
+            "node": "Monta Texto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Monta Texto": {
       "main": [
         [
           {
