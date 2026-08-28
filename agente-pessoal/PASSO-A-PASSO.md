@@ -116,6 +116,13 @@ ambiente — até lá, `Filtra Mensagem`, `Texto ou Audio`, `Converte Base64` e
   `Monta Entrada` tem `fatos_raw` e já perdeu `historico_raw`. Ler o
   histórico de `$input` não dá erro — dá histórico vazio, que é pior. Leia
   pelo nome do nó: `$('Lê Histórico').first().json.historico_raw`.
+- **Chamada do n8n para a Evolution vai pela rede interna, nunca pelo domínio
+  público.** A Evolution não publica porta: pelo domínio, cada chamada sai da
+  máquina, resolve DNS, atravessa o Caddy e negocia TLS só para voltar ao
+  container ao lado. Uma falha de DNS derrubou o `Baixa audio` por causa
+  disso. Use `http://evolution-api:8080` — é o nome do serviço no compose.
+  Vale nos dois sentidos: o webhook da Evolution aponta para
+  `http://n8n:5678` pelo mesmo motivo.
 - **Regra do prompt que contradiz uma ferramenta o modelo contorna sozinho, e
   de um jeito diferente a cada chamada.** O `## Limites` seguiu dizendo "não
   apaga nada" depois que `cancelar_evento`, `arquivar_tarefa` e
@@ -304,7 +311,8 @@ return [{
 ### Nó 5 — Envia WhatsApp (HTTP Request)
 
 - Method: POST
-- URL: `https://evo-hub67.duckdns.org/message/sendText/samir-pessoal`
+- URL: `http://evolution-api:8080/message/sendText/samir-pessoal`
+  (rede interna do Docker — ver armadilha sobre o domínio público)
 - Header: `apikey` = sua Evolution key
 - Body (JSON):
 

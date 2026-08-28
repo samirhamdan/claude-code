@@ -62,7 +62,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://evo-hub67.duckdns.org/chat/getBase64FromMediaMessage/alessio-comercial",
+        "url": "http://evolution-api:8080/chat/getBase64FromMediaMessage/alessio-comercial",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
@@ -364,7 +364,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://evo-hub67.duckdns.org/message/sendText/alessio-comercial",
+        "url": "http://evolution-api:8080/message/sendText/alessio-comercial",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,

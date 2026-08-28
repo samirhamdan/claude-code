@@ -33,7 +33,12 @@ V_HTTP = 4.2
 V_WEBHOOK = 2
 V_WAIT = 1.1
 
-EVO_URL = "https://evo-hub67.duckdns.org/message/sendText/alessio-comercial"
+# Rede interna do Docker, não o domínio público. A Evolution não publica
+# porta: pelo domínio, cada chamada sai da máquina, resolve DNS, atravessa o
+# Caddy e negocia TLS para voltar ao container ao lado. Foi assim que uma
+# falha de DNS derrubou o ramo de áudio do agente pessoal.
+EVO = "http://evolution-api:8080"
+EVO_URL = f"{EVO}/message/sendText/alessio-comercial"
 TTL_BUFFER = 120        # 2 min: a janela de debounce é 8s, sobra folga
 TTL_ESTADO = 60 * 60 * 24 * 30  # 30 dias de conversa parada
 
@@ -132,7 +137,7 @@ return $input.first().json.tipo === 'audio' ? $input.all() : [];
 # ── ramo de áudio ────────────────────────────────────────────────────────
 no("Baixa Áudio", "httpRequest", V_HTTP, {
     "method": "POST",
-    "url": "https://evo-hub67.duckdns.org/chat/getBase64FromMediaMessage/alessio-comercial",
+    "url": f"{EVO}/chat/getBase64FromMediaMessage/alessio-comercial",
     "authentication": "genericCredentialType",
     "genericAuthType": "httpHeaderAuth",
     "sendBody": True,

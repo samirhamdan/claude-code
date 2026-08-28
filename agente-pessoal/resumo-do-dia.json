@@ -84,7 +84,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://evo-hub67.duckdns.org/message/sendText/samir-pessoal",
+        "url": "http://evolution-api:8080/message/sendText/samir-pessoal",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,

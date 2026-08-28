@@ -8,7 +8,10 @@
       "name": "Cron",
       "type": "n8n-nodes-base.cron",
       "typeVersion": 1,
-      "position": [250, 300]
+      "position": [
+        250,
+        300
+      ]
     },
     {
       "parameters": {
@@ -22,7 +25,10 @@
       "name": "Cotações",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 3,
-      "position": [450, 150]
+      "position": [
+        450,
+        150
+      ]
     },
     {
       "parameters": {
@@ -36,7 +42,10 @@
       "name": "Ibovespa",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 3,
-      "position": [450, 250]
+      "position": [
+        450,
+        250
+      ]
     },
     {
       "parameters": {
@@ -50,7 +59,10 @@
       "name": "Acoes",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 3,
-      "position": [450, 350]
+      "position": [
+        450,
+        350
+      ]
     },
     {
       "parameters": {
@@ -64,7 +76,10 @@
       "name": "Noticias",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 3,
-      "position": [450, 450]
+      "position": [
+        450,
+        450
+      ]
     },
     {
       "parameters": {
@@ -74,7 +89,10 @@
       "name": "Merge",
       "type": "n8n-nodes-base.merge",
       "typeVersion": 2,
-      "position": [650, 300]
+      "position": [
+        650,
+        300
+      ]
     },
     {
       "parameters": {
@@ -83,11 +101,14 @@
       "name": "Montar Mensagem",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [850, 300]
+      "position": [
+        850,
+        300
+      ]
     },
     {
       "parameters": {
-        "url": "https://evo-hub67.duckdns.org/message/sendText/samir-pessoal",
+        "url": "http://evolution-api:8080/message/sendText/samir-pessoal",
         "method": "POST",
         "headers": {
           "apikey": "{{EVOLUTION_API_KEY}}"
@@ -98,48 +119,93 @@
       "name": "Enviar para WhatsApp",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 3,
-      "position": [1050, 300]
+      "position": [
+        1050,
+        300
+      ]
     }
   ],
   "connections": {
     "Cron": {
       "main": [
         [
-          { "node": "Cotações", "branch": 0 },
-          { "node": "Ibovespa", "branch": 0 },
-          { "node": "Acoes", "branch": 0 },
-          { "node": "Noticias", "branch": 0 }
+          {
+            "node": "Cotações",
+            "branch": 0
+          },
+          {
+            "node": "Ibovespa",
+            "branch": 0
+          },
+          {
+            "node": "Acoes",
+            "branch": 0
+          },
+          {
+            "node": "Noticias",
+            "branch": 0
+          }
         ]
       ]
     },
     "Cotações": {
       "main": [
-        [{ "node": "Merge", "branch": 0 }]
+        [
+          {
+            "node": "Merge",
+            "branch": 0
+          }
+        ]
       ]
     },
     "Ibovespa": {
       "main": [
-        [{ "node": "Merge", "branch": 1 }]
+        [
+          {
+            "node": "Merge",
+            "branch": 1
+          }
+        ]
       ]
     },
     "Acoes": {
       "main": [
-        [{ "node": "Merge", "branch": 2 }]
+        [
+          {
+            "node": "Merge",
+            "branch": 2
+          }
+        ]
       ]
     },
     "Noticias": {
       "main": [
-        [{ "node": "Merge", "branch": 3 }]
+        [
+          {
+            "node": "Merge",
+            "branch": 3
+          }
+        ]
       ]
     },
     "Merge": {
       "main": [
-        [{ "node": "Montar Mensagem", "branch": 0 }]
+        [
+          {
+            "node": "Montar Mensagem",
+            "branch": 0
+          }
+        ]
       ]
     },
     "Montar Mensagem": {
       "main": [
-        [{ "node": "Enviar para WhatsApp", "branch": 0 }]
+        [
+          {
+            "node": "Enviar para WhatsApp",
+            "branch": 0
+          }
+        ]
       ]
     }
   },
